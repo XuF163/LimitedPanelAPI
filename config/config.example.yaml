@@ -45,11 +45,16 @@ preset:
 proxy:
   enabled: false
   required: false
+  db:
+    # 留空则默认：./data/proxy.sqlite
+    path: ""
   v2ray:
     downloadUrl: https://github.com/v2fly/v2ray-core/releases/download/v5.44.1/v2ray-windows-64.zip
     binDir: ./bin/v2ray
     logLevel: warning
     basePort: 17890
+    # 默认关闭：避免在项目目录生成大量 v2ray 配置 json
+    keepConfigFiles: false
   subscription:
     urls:
       # - https://example.com/subscription

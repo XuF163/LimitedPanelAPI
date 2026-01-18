@@ -32,12 +32,16 @@ Enka 扫描状态与（可选）原始响应默认写入 `data/scan.sqlite`（�
 配置项：
 - `proxy.enabled`: 是否启用
 - `proxy.required`: 启用但无可用节点时是否直接报错退出
+- `proxy.db.path`: 代理节点启动/测活记录数据库路径（默认：`data/proxy.sqlite`）
+- `proxy.v2ray.keepConfigFiles`: 是否保留 v2ray 配置文件到项目目录（默认 false，写到系统临时目录以避免大量 json）
 - `proxy.subscription.urls`: 订阅链接列表
 - `proxy.subscription.maxNodes`: 代理池大小（默认 3）
 - `proxy.subscription.probeCount`: 探测节点上限（默认 20）
 
 环境变量快捷覆盖：
 - `PROXY_ENABLED=1`
+- `PROXY_DB_PATH=./data/proxy.sqlite`
+- `PROXY_KEEP_CONFIG_FILES=1`
 - `PROXY_SUB_URLS="https://example.com/sub1,https://example.com/sub2"`
 
 ## QA 流程（代理池 + 扫描 + 对比梁氏预设）

@@ -55,12 +55,19 @@ proxy:
   enabled: false
   # enabled=true 且 required=true 时，如果没有可用节点会直接报错退出
   required: false
+  # 代理节点启动/测活记录存储（SQLite）
+  db:
+    # 留空则默认：./data/proxy.sqlite
+    path: ""
   v2ray:
     # Windows 64 位默认下载地址
     downloadUrl: https://github.com/v2fly/v2ray-core/releases/download/v5.44.1/v2ray-windows-64.zip
     binDir: ./bin/v2ray
     logLevel: warning
     basePort: 17890
+    # 是否把 v2ray 配置落地到项目目录（data/proxy）。默认关闭以避免大量 json 造成卡顿。
+    # 关闭时会写到系统临时目录，并在进程退出时尽量清理。
+    keepConfigFiles: false
   subscription:
     # 订阅链接列表（支持：base64/vmess/vless/trojan/ss、以及 Clash YAML 的 proxies:）
     urls: []

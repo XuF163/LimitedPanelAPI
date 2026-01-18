@@ -1,10 +1,12 @@
 import fs from "node:fs"
 import fsp from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { ProxyAgent } from "undici"
 
 import { ensureDir } from "../utils/fs.js"
+import { openProxyDb } from "../db/proxy.js"
 import { ensureV2rayCore } from "./v2ray-core.js"
 import { buildV2rayHttpProxyConfig } from "./v2ray.js"
 import { loadSubscriptionNodes } from "./subscription.js"
@@ -72,6 +74,27 @@ function nodeKey(n) {
   ].join("|")
 }
 
+async function cleanupLegacyProxyJsonFiles() {
+  const dir = path.resolve("data", "proxy")
+  if (!fs.existsSync(dir)) return
+  const entries = await fsp.readdir(dir, { withFileTypes: true })
+
+  const isLegacy = (name) => (
+    /^v2ray\.\d+\.json$/i.test(name) ||
+    /^debug\.v2ray(\.\d+)?\.json$/i.test(name)
+  )
+
+  await Promise.all(entries.map(async (e) => {
+    if (!e.isFile()) return
+    if (!isLegacy(e.name)) return
+    try {
+      await fsp.unlink(path.join(dir, e.name))
+    } catch {
+      // best-effort
+    }
+  }))
+}
+
 function pickCandidates(nodes, probeCount, { strategy = "spread", offset = 0 } = {}) {
   const list = Array.isArray(nodes) ? nodes : []
   const n = list.length
@@ -104,6 +127,7 @@ export async function ensureProxyPool(cfg = {}) {
   if (!enabled) return { enabled: false, proxyUrls: [], close: async () => {} }
 
   const required = toBool(process.env.PROXY_REQUIRED, cfg?.proxy?.required ?? false)
+  const keepConfigFiles = toBool(process.env.PROXY_KEEP_CONFIG_FILES, cfg?.proxy?.v2ray?.keepConfigFiles ?? false)
 
   const downloadUrl =
     process.env.V2RAY_DOWNLOAD_URL ||
@@ -143,6 +167,12 @@ export async function ensureProxyPool(cfg = {}) {
     return { enabled: true, proxyUrls: [], close: async () => {} }
   }
 
+  // Reduce workspace file spam by removing legacy generated v2ray config JSON files.
+  // NOTE: actual running configs will be placed in OS temp dir unless keepConfigFiles=true.
+  if (!keepConfigFiles) {
+    await cleanupLegacyProxyJsonFiles().catch(() => {})
+  }
+
   const { exePath, binDir: resolvedBin } = await ensureV2rayCore({ binDir, downloadUrl })
 
   let nodes
@@ -169,19 +199,37 @@ export async function ensureProxyPool(cfg = {}) {
 
   console.log(`[proxy] nodes parsed: ${nodes.length}`)
 
+  const proxyDb = (() => {
+    try {
+      const dbPath = process.env.PROXY_DB_PATH || cfg?.proxy?.db?.path
+      return openProxyDb({ ...(dbPath ? { dbPath } : {}) })
+    } catch (e) {
+      console.warn(`[proxy] open proxy db failed; continue without db: ${e?.message || String(e)}`)
+      return null
+    }
+  })()
+
   const ports = nextPorts(basePort, Math.min(2000, probeCount * probeRounds + 10))
   const procs = []
   const proxyUrls = []
+  const tempFiles = new Set()
 
   const startOne = async (node, port) => {
     const cfgObj = buildV2rayHttpProxyConfig(node, { listen: "127.0.0.1", port, logLevel })
     const runDir = path.resolve(".")
-    const cfgDir = path.join(runDir, "data", "proxy")
+    const cfgDir = keepConfigFiles
+      ? path.join(runDir, "data", "proxy")
+      : path.join(os.tmpdir(), "ExtremePanelAPI", "v2ray")
     await ensureDir(cfgDir)
-    const cfgPath = path.join(cfgDir, `v2ray.${port}.json`)
+    const cfgPath = keepConfigFiles
+      ? path.join(cfgDir, `v2ray.${port}.json`)
+      : path.join(cfgDir, `v2ray.${process.pid}.${port}.${Date.now()}.json`)
     await fsp.writeFile(cfgPath, JSON.stringify(cfgObj, null, 2), "utf8")
+    if (!keepConfigFiles) tempFiles.add(cfgPath)
 
     const proxyUrl = `http://127.0.0.1:${port}`
+    const attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: cfgObj, testUrl })
+    let lastTest = null
 
     // v2ray-core CLI has differed across major versions; try a few common variants.
     const argVariants = [
@@ -204,14 +252,26 @@ export async function ensureProxyPool(cfg = {}) {
       // Wait a bit, then test.
       await new Promise((r) => setTimeout(r, startupMs))
       const test = await testProxy(proxyUrl, { testUrl, timeoutMs: testTimeoutMs, headers: testHeaders })
+      lastTest = test
       if (!test.ok) {
         try { child.kill() } catch {}
         continue
       }
 
+      proxyDb?.finishAttempt?.(attemptId, { ok: true, status: test.status, ms: test.ms })
       return { ok: true, child, cfgPath, proxyUrl, node, test }
     }
 
+    proxyDb?.finishAttempt?.(attemptId, {
+      ok: false,
+      status: lastTest?.status ?? null,
+      ms: lastTest?.ms ?? 0,
+      error: lastTest?.error || "v2ray core started but health-check failed"
+    })
+    if (!keepConfigFiles) {
+      try { await fsp.unlink(cfgPath) } catch {}
+      tempFiles.delete(cfgPath)
+    }
     return { ok: false, proxyUrl, test: { ok: false, status: null, ms: 0, error: "v2ray core started but health-check failed" } }
   }
 
@@ -250,6 +310,10 @@ export async function ensureProxyPool(cfg = {}) {
         // Keep as many usable nodes as possible (up to poolSize); drop the rest.
         if (proxyUrls.length >= poolSize) {
           try { res.child.kill() } catch {}
+          if (!keepConfigFiles) {
+            try { await fsp.unlink(res.cfgPath) } catch {}
+            tempFiles.delete(res.cfgPath)
+          }
           stop = true
           return
         }
@@ -274,6 +338,10 @@ export async function ensureProxyPool(cfg = {}) {
     for (const p of procs) {
       try { p.child.kill() } catch {}
     }
+    for (const cfgPath of tempFiles) {
+      try { await fsp.unlink(cfgPath) } catch {}
+    }
+    try { proxyDb?.close?.() } catch {}
     throw new Error(
       `proxy enabled but no usable node found (testUrl=${testUrl}). ` +
       `Hint: testUrl should be an API that returns JSON (e.g. https://enka.network/api/uid/100000001).`
@@ -284,6 +352,10 @@ export async function ensureProxyPool(cfg = {}) {
     for (const p of procs) {
       try { p.child.kill() } catch {}
     }
+    for (const cfgPath of tempFiles) {
+      try { await fsp.unlink(cfgPath) } catch {}
+    }
+    try { proxyDb?.close?.() } catch {}
   }
 
   // Keep running; user fetch will use these local proxy URLs.
