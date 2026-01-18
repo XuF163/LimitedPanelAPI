@@ -3,5 +3,9 @@ data/
 out/
 resources/meta-gs/
 resources/meta-sr/
+bin/
 .env
+config/config.yaml
+config/config.json
 
+.ace-tool/

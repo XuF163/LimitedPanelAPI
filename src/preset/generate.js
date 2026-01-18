@@ -3,7 +3,11 @@ import fsp from "node:fs/promises"
 import path from "node:path"
 import { paths } from "../config.js"
 import { loadGsMeta } from "../meta/gs.js"
+import { loadSrMeta } from "../meta/sr.js"
 import { buildGsCharCfg, calcGsBuildMark } from "../score/gs.js"
+import { calcSrBuildMark, getSrWeights } from "../score/sr.js"
+import { calcZzzAvatarMark, buildZzzExtremeEquipList } from "../score/zzz.js"
+import { buildZzzBestWeapon } from "../zzz/weapon.js"
 import { ensureDir, writeJson } from "../utils/fs.js"
 
 function parseArgs(argv) {
@@ -12,7 +16,8 @@ function parseArgs(argv) {
     uid: "100000000",
     name: "极限面板",
     out: "",
-    limitChars: 0
+    limitChars: 0,
+    quiet: false
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -21,6 +26,7 @@ function parseArgs(argv) {
     else if (a === "--name") args.name = argv[++i]
     else if (a === "--out") args.out = argv[++i]
     else if (a === "--limitChars") args.limitChars = Number(argv[++i])
+    else if (a === "--quiet") args.quiet = true
   }
   return args
 }
@@ -92,116 +98,358 @@ async function selectBestSample(meta, charId) {
   return best
 }
 
+function pickTopSubKeysSr(meta, weights = {}, banKey, count = 4) {
+  const candidates = meta.artifact.subAttr
+    .filter((k) => k !== banKey)
+    .map((k) => ({ k, w: Number(weights?.[k] || 0) }))
+    .filter((d) => d.w > 0)
+    .sort((a, b) => b.w - a.w || a.k.localeCompare(b.k))
+
+  const picked = []
+  for (const c of candidates) {
+    if (picked.length >= count) break
+    if (picked.includes(c.k)) continue
+    picked.push(c.k)
+  }
+  // 兜底补满
+  for (const k of meta.artifact.subAttr) {
+    if (picked.length >= count) break
+    if (k === banKey) continue
+    if (!picked.includes(k)) picked.push(k)
+  }
+  return picked.slice(0, count)
+}
+
+function genExtremeAttrIdsSr(meta, keys) {
+  const [ top, ...rest ] = keys
+  const ids = []
+  const topId = meta.artifact.subIdByKey[top]
+  if (!topId) return []
+  ids.push(`${topId},6,0`)
+  for (const k of rest.slice(0, 3)) {
+    const id = meta.artifact.subIdByKey[k]
+    if (id) ids.push(`${id},1,0`)
+  }
+  return ids
+}
+
+async function selectBestSampleSr(meta, charId) {
+  const file = path.join(paths.samplesDir("sr"), `${charId}.jsonl`)
+  if (!fs.existsSync(file)) return null
+  const rows = await readJsonl(file)
+  let best = null
+  let bestMark = -1
+  const charName = meta.character.byId?.[charId]?.name || ""
+  for (const r of rows) {
+    const mark = calcSrBuildMark(meta, {
+      charId: Number(r.charId),
+      charName: r.charName || charName,
+      artis: r.artis
+    })
+    if (mark.mark > bestMark) {
+      bestMark = mark.mark
+      best = { ...r, _mark: mark }
+    }
+  }
+  return best
+}
+
+async function selectBestSampleZzz(charId) {
+  const file = path.join(paths.samplesDir("zzz"), `${charId}.jsonl`)
+  if (!fs.existsSync(file)) return null
+  const rows = await readJsonl(file)
+  let best = null
+  let bestMark = -1
+  for (const r of rows) {
+    const avatar = r?.avatar
+    if (!avatar?.equip) continue
+    const mark = calcZzzAvatarMark(avatar)
+    if (mark.mark > bestMark) {
+      bestMark = mark.mark
+      best = { ...r, _mark: mark }
+    }
+  }
+  return best
+}
+
 export async function cmdPresetGenerate(argv) {
   const args = parseArgs(argv)
-  if (args.game !== "gs") throw new Error("Only --game gs is supported for now")
 
-  const meta = await loadGsMeta()
-  const outPath = args.out || path.join(paths.outDir("gs"), `${args.uid}.json`)
-  await ensureDir(path.dirname(outPath))
+  if (args.game === "gs") {
+    const meta = await loadGsMeta()
+    const outPath = args.out || path.join(paths.outDir("gs"), `${args.uid}.json`)
+    await ensureDir(path.dirname(outPath))
 
-  const sampleDir = paths.samplesDir("gs")
-  if (!fs.existsSync(sampleDir)) {
-    throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
-  }
-  const charIds = fs
-    .readdirSync(sampleDir, { withFileTypes: true })
-    .filter((d) => d.isFile() && d.name.endsWith(".jsonl"))
-    .map((d) => d.name.replace(/\.jsonl$/, ""))
-    .filter((s) => /^\d+$/.test(s))
+    const sampleDir = paths.samplesDir("gs")
+    if (!fs.existsSync(sampleDir)) {
+      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+    }
+    const charIds = fs
+      .readdirSync(sampleDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith(".jsonl"))
+      .map((d) => d.name.replace(/\.jsonl$/, ""))
+      .filter((s) => /^\d+$/.test(s))
 
-  const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+    const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
 
-  const result = {
-    uid: String(args.uid),
-    name: args.name,
-    level: "",
-    word: "",
-    face: "",
-    card: "",
-    sign: "",
-    info: false,
-    _generatedAt: Date.now(),
-    avatars: {}
-  }
-
-  for (const id of ids) {
-    const charId = Number(id)
-    const charMeta = meta.character.byId[charId]
-    if (!charMeta) continue
-
-    const best = await selectBestSample(meta, charId)
-    if (!best) continue
-
-    const weaponName = best.weapon?.name || ""
-    const weapon = {
-      name: weaponName,
-      level: 90,
-      promote: 6,
-      affix: 5
+    const result = {
+      uid: String(args.uid),
+      name: args.name,
+      level: "",
+      word: "",
+      face: "",
+      card: "",
+      sign: "",
+      info: false,
+      _generatedAt: Date.now(),
+      avatars: {}
     }
 
-    const baseBuild = {
-      charId,
-      charName: charMeta.name,
-      charAbbr: charMeta.abbr,
-      elem: charMeta.elem,
-      cons: 6,
-      weapon,
-      artis: best.artis
-    }
+    for (const id of ids) {
+      const charId = Number(id)
+      const charMeta = meta.character.byId[charId]
+      if (!charMeta) continue
 
-    const weightRet = await calcGsBuildMark(meta, baseBuild)
-    const detail = await meta.character.getDetailByName(charMeta.name)
-    const charCfg = buildGsCharCfg(meta, detail?.baseAttr, weightRet.weight)
+      const best = await selectBestSample(meta, charId)
+      if (!best) continue
 
-    const artisOut = {}
-    for (const idx of [ 1, 2, 3, 4, 5 ]) {
-      const piece = best.artis[idx]
-      if (!piece) continue
-      const mainKey = meta.artifact.mainIdMap[piece.mainId]
-      const keys = pickTopSubKeys(meta, charCfg, mainKey, 4)
-      const attrIds = genExtremeAttrIds(meta, keys)
-      artisOut[idx] = {
-        level: 20,
-        star: 5,
-        name: piece.name,
-        mainId: piece.mainId,
-        attrIds
+      const weaponName = best.weapon?.name || ""
+      const weapon = {
+        name: weaponName,
+        level: 90,
+        promote: 6,
+        affix: 5
       }
+
+      const baseBuild = {
+        charId,
+        charName: charMeta.name,
+        charAbbr: charMeta.abbr,
+        elem: charMeta.elem,
+        cons: 6,
+        weapon,
+        artis: best.artis
+      }
+
+      const weightRet = await calcGsBuildMark(meta, baseBuild)
+      const detail = await meta.character.getDetailByName(charMeta.name)
+      const charCfg = buildGsCharCfg(meta, detail?.baseAttr, weightRet.weight)
+
+      const artisOut = {}
+      for (const idx of [ 1, 2, 3, 4, 5 ]) {
+        const piece = best.artis[idx]
+        if (!piece) continue
+        const mainKey = meta.artifact.mainIdMap[piece.mainId]
+        const keys = pickTopSubKeys(meta, charCfg, mainKey, 4)
+        const attrIds = genExtremeAttrIds(meta, keys)
+        artisOut[idx] = {
+          level: 20,
+          star: 5,
+          name: piece.name,
+          mainId: piece.mainId,
+          attrIds
+        }
+      }
+
+      const avatar = {
+        name: charMeta.name,
+        id: charId,
+        elem: charMeta.elem,
+        level: 100,
+        promote: 6,
+        fetter: 10,
+        costume: 0,
+        cons: 6,
+        talent: { a: 10, e: 10, q: 10 },
+        weapon,
+        artis: artisOut,
+        _source: "enka",
+        _time: Date.now(),
+        _update: Date.now(),
+        _talent: Date.now()
+      }
+
+      result.avatars[String(charId)] = avatar
+
+      const extremeMark = await calcGsBuildMark(meta, {
+        charId,
+        charName: charMeta.name,
+        elem: charMeta.elem,
+        cons: 6,
+        weapon,
+        artis: artisOut
+      })
+      if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
     }
 
-    const avatar = {
-      name: charMeta.name,
-      id: charId,
-      elem: charMeta.elem,
-      level: 100,
-      promote: 6,
-      fetter: 10,
-      costume: 0,
-      cons: 6,
-      talent: { a: 10, e: 10, q: 10 },
-      weapon,
-      artis: artisOut,
-      _source: "enka",
-      _time: Date.now(),
-      _update: Date.now(),
-      _talent: Date.now()
-    }
-
-    result.avatars[String(charId)] = avatar
-
-    const extremeMark = await calcGsBuildMark(meta, {
-      charId,
-      charName: charMeta.name,
-      elem: charMeta.elem,
-      cons: 6,
-      weapon,
-      artis: artisOut
-    })
-    console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
+    await writeJson(outPath, result, 2)
+    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
+    else console.log(`written: ${outPath}`)
+    return
   }
 
-  await writeJson(outPath, result, 2)
-  console.log(`written: ${outPath}`)
+  if (args.game === "sr") {
+    const meta = await loadSrMeta()
+    const outPath = args.out || path.join(paths.outDir("sr"), `${args.uid}.json`)
+    await ensureDir(path.dirname(outPath))
+
+    const sampleDir = paths.samplesDir("sr")
+    if (!fs.existsSync(sampleDir)) {
+      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+    }
+    const charIds = fs
+      .readdirSync(sampleDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith(".jsonl"))
+      .map((d) => d.name.replace(/\.jsonl$/, ""))
+      .filter((s) => /^\d+$/.test(s))
+
+    const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+
+    const result = {
+      uid: String(args.uid),
+      name: args.name,
+      level: "",
+      word: "",
+      face: "",
+      card: "",
+      sign: "",
+      info: false,
+      _generatedAt: Date.now(),
+      avatars: {}
+    }
+
+    for (const id of ids) {
+      const charId = Number(id)
+      const charMeta = meta.character.byId[charId]
+      if (!charMeta) continue
+
+      const best = await selectBestSampleSr(meta, charId)
+      if (!best) continue
+
+      const weights = best._mark?.weights && Object.keys(best._mark.weights).length ? best._mark.weights : getSrWeights(meta, { charId, charName: charMeta.name })
+
+      const weapon = {
+        id: Number(best.weapon?.id || 0),
+        level: 80,
+        promote: 6,
+        affix: 5
+      }
+
+      const artisOut = {}
+      for (const idx of [ 1, 2, 3, 4, 5, 6 ]) {
+        const piece = best.artis?.[idx] || best.artis?.[String(idx)]
+        if (!piece) continue
+        const mainKey = meta.artifact.mainIdx?.[String(idx)]?.[String(piece.mainId)] || null
+        const keys = pickTopSubKeysSr(meta, weights, mainKey, 4)
+        const attrIds = genExtremeAttrIdsSr(meta, keys)
+        artisOut[idx] = {
+          level: 15,
+          star: 5,
+          id: Number(piece.id || 0),
+          mainId: Number(piece.mainId || 0),
+          attrIds
+        }
+      }
+
+      const avatar = {
+        name: charMeta.name,
+        id: charId,
+        elem: charMeta.elem,
+        level: 80,
+        promote: 6,
+        cons: 6,
+        talent: { a: 6, e: 10, q: 10, t: 10 },
+        weapon,
+        artis: artisOut,
+        _source: "enka",
+        _time: Date.now(),
+        _update: Date.now(),
+        _talent: Date.now()
+      }
+
+      result.avatars[String(charId)] = avatar
+
+      const extremeMark = calcSrBuildMark(meta, {
+        charId,
+        charName: charMeta.name,
+        artis: artisOut
+      })
+      if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
+    }
+
+    await writeJson(outPath, result, 2)
+    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
+    else console.log(`written: ${outPath}`)
+    return
+  }
+
+  if (args.game === "zzz") {
+    const outPath = args.out || path.join(paths.outDir("zzz"), `${args.uid}.json`)
+    await ensureDir(path.dirname(outPath))
+
+    const sampleDir = paths.samplesDir("zzz")
+    if (!fs.existsSync(sampleDir)) {
+      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+    }
+    const charIds = fs
+      .readdirSync(sampleDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith(".jsonl"))
+      .map((d) => d.name.replace(/\.jsonl$/, ""))
+      .filter((s) => /^\d+$/.test(s))
+
+    const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+
+    const result = {
+      uid: String(args.uid),
+      name: args.name,
+      level: "",
+      word: "",
+      face: "",
+      card: "",
+      sign: "",
+      info: false,
+      _generatedAt: Date.now(),
+      avatars: {}
+    }
+
+    for (const id of ids) {
+      const charId = Number(id)
+      const best = await selectBestSampleZzz(charId)
+      if (!best?.avatar) continue
+
+      const baseAvatar = best.avatar
+      const extremeEquip = buildZzzExtremeEquipList(baseAvatar)
+      const weaponPick = await buildZzzBestWeapon(baseAvatar)
+      const outName = String(baseAvatar?.name_mi18n || baseAvatar?.full_name_mi18n || "")
+
+      const outAvatar = {
+        name: outName,
+        name_mi18n: String(baseAvatar?.name_mi18n || outName),
+        full_name_mi18n: String(baseAvatar?.full_name_mi18n || outName),
+        id: charId,
+        level: 60,
+        element_type: baseAvatar?.element_type,
+        avatar_profession: baseAvatar?.avatar_profession,
+        rarity: baseAvatar?.rarity,
+        rank: baseAvatar?.rank,
+        weapon: weaponPick?.weapon || baseAvatar?.weapon || null,
+        equip: extremeEquip,
+        _source: "enka",
+        _time: Date.now(),
+        _update: Date.now()
+      }
+
+      result.avatars[String(charId)] = outAvatar
+
+      const extremeMark = calcZzzAvatarMark({ ...baseAvatar, equip: extremeEquip })
+      if (!args.quiet) console.log(`${charId} ${outAvatar.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}${weaponPick?.signature ? " sigWeapon" : ""}`)
+    }
+
+    await writeJson(outPath, result, 2)
+    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
+    else console.log(`written: ${outPath}`)
+    return
+  }
+
+  throw new Error(`Unsupported --game: ${args.game}`)
 }

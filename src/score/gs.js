@@ -71,8 +71,14 @@ export function buildArtisHelper(meta, artisMap = {}) {
 
   const isAttr = (attr, pos = "") => {
     const dmgIdx = 4
-    const attrs = (attr || "").split(",").map((s) => s.trim()).filter(Boolean)
-    const positions = (pos || "3,4,5").split(",").map((s) => s.trim()).filter(Boolean)
+    const toList = (v, fallback = []) => {
+      if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean)
+      if (v == null || v === "") return fallback
+      if (typeof v === "string") return v.split(",").map((s) => s.trim()).filter(Boolean)
+      return [ String(v) ].map((s) => s.trim()).filter(Boolean)
+    }
+    const attrs = toList(attr, [])
+    const positions = toList(pos, [ "3", "4", "5" ])
     for (const p of positions) {
       const idx = Number(p)
       const posAttr = mainAttr[idx]

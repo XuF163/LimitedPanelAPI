@@ -10,18 +10,18 @@ export class EnkaHttpError extends Error {
   }
 }
 
-export async function fetchEnkaGs(uid, options = {}) {
+export async function fetchEnkaSr(uid, options = {}) {
   const baseUrl = options.baseUrl || enka.baseUrl
   const userAgent = options.userAgent || enka.userAgent
   const timeoutMs = options.timeoutMs ?? enka.timeoutMs
   const dispatcher = options.dispatcher
 
-  const url = new URL(`api/uid/${uid}`, baseUrl).toString()
+  const url = new URL(`api/hsr/uid/${uid}`, baseUrl).toString()
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const fetchOptions = {
+    const res = await fetch(url, {
       headers: {
         "user-agent": userAgent,
         accept: "application/json"
@@ -29,9 +29,7 @@ export async function fetchEnkaGs(uid, options = {}) {
       redirect: "follow",
       signal: controller.signal,
       ...(dispatcher ? { dispatcher } : {})
-    }
-
-    const res = await fetch(url, fetchOptions)
+    })
     const text = await res.text()
     if (!res.ok) {
       throw new EnkaHttpError(uid, res.status, text)
@@ -45,4 +43,3 @@ export async function fetchEnkaGs(uid, options = {}) {
     clearTimeout(timeoutId)
   }
 }
-

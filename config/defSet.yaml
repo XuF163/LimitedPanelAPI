@@ -1,0 +1,142 @@
+game: gs
+
+server:
+  port: 4567
+  enabled: true
+
+meta:
+  autoSync: true
+
+samples:
+  # "playerdata" | "enka"
+  mode: playerdata
+  alwaysSample: true
+
+  playerdata:
+    # 为空则自动使用：<YunzaiRoot>/data/PlayerData/<game>
+    dir: ""
+    # 0 表示不限制
+    maxFiles: 0
+
+  enka:
+    # 两种方式二选一：
+    # 1) uids: [242422996, ...]
+    uids: []
+    # 2) uidStart + uidEnd（会被 maxCount 截断，避免扫描超大范围导致 OOM）
+    uidStart: null
+    uidEnd: null
+
+    maxCount: 20
+    # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
+    concurrency: 1
+    # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
+    retryFirst: 5
+    delayMs: 30000
+    jitterMs: 2000
+    # 单次请求超时时间（毫秒）。为空/0 则使用默认值。
+    timeoutMs: 15000
+    # 是否将原始响应写入 sqlite（推荐开启）
+    storeRawDb: true
+    # 是否将原始响应另存为 data/raw/<game>/<uid>.json（大规模扫描不推荐）
+    saveRawFile: false
+    # 简易熔断：避免上游整体不可用时浪费长时间扫描
+    circuitBreaker:
+      maxConsecutiveFails: 5
+      breakOn429: true
+
+preset:
+  uid: "100000000"
+  name: 极限面板
+  alwaysGenerate: true
+  limitChars: 0
+
+# 代理（v2ray-core，可选）
+proxy:
+  enabled: false
+  # enabled=true 且 required=true 时，如果没有可用节点会直接报错退出
+  required: false
+  v2ray:
+    # Windows 64 位默认下载地址
+    downloadUrl: https://github.com/v2fly/v2ray-core/releases/download/v5.44.1/v2ray-windows-64.zip
+    binDir: ./bin/v2ray
+    logLevel: warning
+    basePort: 17890
+  subscription:
+    # 订阅链接列表（支持：base64/vmess/vless/trojan/ss、以及 Clash YAML 的 proxies:）
+    urls: []
+    # 订阅拉取超时（毫秒）
+    timeoutMs: 30000
+    # 拉取失败时允许使用本地缓存（更抗网络抖动/对方偶发 reset）
+    useCacheOnFail: true
+    # 订阅缓存目录（按 URL hash 保存原始文本）
+    cacheDir: ./data/proxy/subscription-cache
+    # 缓存 TTL（秒）；0 表示不限制（只要文件存在就可用）
+    cacheTtlSec: 0
+    # 最多保留多少个可用节点作为代理池
+    maxNodes: 3
+    # 最多探测多少个节点（从订阅里按顺序取前 N 个探测，直到凑满 maxNodes）
+    probeCount: 20
+    # 探测轮数：当订阅前缀节点大面积不可用时，使用“spread”策略会把探测名额分布到全列表。
+    # 例如 probeCount=20, probeRounds=3 => 最多探测约 60 个不同节点，直到凑满 maxNodes。
+    probeRounds: 3
+    # 节点选择策略：first=只测前 N 个；spread=把 N 个探测名额均匀分布在整个订阅列表
+    pickStrategy: spread
+    # 启动/测活并发（避免逐个节点启动导致耗时过长）
+    startConcurrency: 6
+    # 连续传输失败阈值：超过后禁用该代理（越大越“耐用”，但坏代理会拖慢整体）
+    maxConsecutiveFails: 30
+    # 建议用 API 地址做测活（403/404 也算“可连通”）
+    testUrl: https://enka.network/api/uid/100000001
+    testTimeoutMs: 8000
+
+# QA：代理池 + 扫描 + 极限面板生成 + 对比梁氏预设
+qa:
+  games: [gs, sr]
+  uid: "100000000"
+  # ZZZ 的预设 UID（8 位）
+  uidZzz: "10000000"
+  scan:
+    # 批次大小（每批调用一次 sample:collect）
+    batchSize: 2000
+    # 每次 sample:collect 的实际 count（用于更频繁输出进度；<= batchSize）
+    stepSize: 200
+    # 每个代理的请求间隔（毫秒）。总吞吐量≈代理数 / delayMs
+    delayMs: 3000
+    # 并发 worker 数（建议 <= 代理池数量）
+    concurrency: 20
+    # 单次 Enka 请求超时（毫秒）
+    enkaTimeoutMs: 15000
+    gs:
+      uidStart: 100000001
+      maxUids: 2000
+      targetChars: 80
+    sr:
+      uidStart: 100000001
+      maxUids: 2000
+      targetChars: 60
+    zzz:
+      uidStart: 10000000
+      maxUids: 500
+      targetChars: 20
+  verify:
+    # diff: 对比我方评分 vs liangshi 评分的绝对差
+    # miao: 统一用 miao-plugin 的圣遗物评分，做阈值合格率统计
+    mode: miao
+    gs:
+      threshold: 300
+      tolerance: 5
+      minCommon: 10
+      passRate: 0.8
+    sr:
+      # 注意：SR 的 mark 量级比 GS 大很多，tolerance 需要单独配置
+      threshold: 300
+      tolerance: 500
+      minCommon: 10
+      passRate: 0.5
+    zzz:
+      # ZZZ：暂无梁氏基线，校验规则为「高分 + 盘面强化规律 +（可选）专武」
+      minMark: 590
+      requireSignature: true
+      requirePattern: true
+      minAvatars: 5
+      passRate: 1

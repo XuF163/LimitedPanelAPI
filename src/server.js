@@ -28,7 +28,7 @@ const server = http.createServer((req, res) => {
   }
 
   // GET /presets/gs/100000000.json
-  const m = /^\/presets\/(gs|sr)\/(\d+)\.json$/.exec(url.pathname)
+  const m = /^\/presets\/(gs|sr|zzz)\/(\d+)\.json$/.exec(url.pathname)
   if (req.method === "GET" && m) {
     const game = m[1]
     const uid = m[2]

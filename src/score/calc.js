@@ -1,6 +1,8 @@
 import fs from "node:fs/promises"
 import { loadGsMeta } from "../meta/gs.js"
 import { calcGsBuildMark } from "./gs.js"
+import { loadSrMeta } from "../meta/sr.js"
+import { calcSrBuildMark } from "./sr.js"
 
 function parseArgs(argv) {
   const args = { game: "gs", file: "", charId: null }
@@ -15,10 +17,10 @@ function parseArgs(argv) {
 
 export async function cmdScoreCalc(argv) {
   const args = parseArgs(argv)
-  if (args.game !== "gs") throw new Error("Only --game gs is supported for now")
   if (!args.file) throw new Error("--file is required")
 
-  const meta = await loadGsMeta()
+  if (!["gs", "sr"].includes(args.game)) throw new Error(`Only --game gs|sr is supported for now (got: ${args.game})`)
+  const meta = args.game === "sr" ? await loadSrMeta() : await loadGsMeta()
   const txt = await fs.readFile(args.file, "utf8")
   const data = JSON.parse(txt)
   const avatars = data.avatars || {}
@@ -27,15 +29,23 @@ export async function cmdScoreCalc(argv) {
   for (const id of ids) {
     const a = avatars[id]
     if (!a?.artis) continue
-    const ret = await calcGsBuildMark(meta, {
-      charId: Number(a.id || id),
-      charName: a.name,
-      elem: a.elem,
-      weapon: a.weapon,
-      cons: a.cons,
-      artis: a.artis
-    })
-    console.log(`${id} ${a.name} mark=${ret.mark}`)
+    if (args.game === "sr") {
+      const ret = calcSrBuildMark(meta, {
+        charId: Number(a.id || id),
+        charName: a.name,
+        artis: a.artis
+      })
+      console.log(`${id} ${a.name} mark=${ret.mark}`)
+    } else {
+      const ret = await calcGsBuildMark(meta, {
+        charId: Number(a.id || id),
+        charName: a.name,
+        elem: a.elem,
+        weapon: a.weapon,
+        cons: a.cons,
+        artis: a.artis
+      })
+      console.log(`${id} ${a.name} mark=${ret.mark}`)
+    }
   }
 }
-
