@@ -51,6 +51,12 @@ function toBool(v, fallback = false) {
   return fallback
 }
 
+async function resetSqliteFile(filePath) {
+  for (const p of [filePath, `${filePath}-wal`, `${filePath}-shm`]) {
+    try { if (fs.existsSync(p)) await fsp.rm(p, { force: true }) } catch {}
+  }
+}
+
 async function ensureDir(dir) {
   await fsp.mkdir(dir, { recursive: true })
 }
@@ -491,7 +497,14 @@ async function main() {
   const zzzMinAvatars = Math.max(0, toInt(process.env.MIN_AVATARS_ZZZ, Number(qaVerifyZzz?.minAvatars ?? 5)))
   const passRateRequiredZzz = Math.max(0, Math.min(1, toNum(process.env.PASS_RATE_ZZZ, toNum(qaVerifyZzz?.passRate, 1))))
 
-  const scanDbBase = path.join(projectRoot, "data", `scan.qa.${Date.now()}.sqlite`)
+  const scanDbBase = path.resolve(
+    process.env.SCAN_DB_PATH ||
+      process.env.QA_SCAN_DB_PATH ||
+      String(qaScan?.dbPath || "").trim() ||
+      path.join(projectRoot, "data", "scan.qa.sqlite")
+  )
+  const resetDb = toBool(process.env.QA_SCAN_DB_RESET, toBool(qaScan?.dbReset, true))
+  if (resetDb) await resetSqliteFile(scanDbBase)
   process.env.SCAN_DB_PATH = scanDbBase
 
   // Proxy pool (strict health check: require JSON and no HTML/WAF page).
@@ -509,6 +522,7 @@ async function main() {
   console.log(`proxyPoolSize=${proxyPoolSize} probeCount=${proxyProbeCount}`)
   const stepSize = Math.max(10, Math.min(batchSize, toInt(process.env.STEP_SIZE, Number(qaScan?.stepSize ?? 200))))
   console.log(`delayMs=${delayMs} concurrency=${concurrency} batchSize=${batchSize} stepSize=${stepSize} enkaTimeoutMs=${enkaTimeoutMs}`)
+  console.log(`scanDb=${scanDbBase} resetDb=${resetDb}`)
   console.log(`maxUidsGs=${maxUidsGs} maxUidsSr=${maxUidsSr}`)
   if (games.includes("zzz")) console.log(`maxUidsZzz=${maxUidsZzz} uidStartZzz=${uidStartZzz} targetCharsZzz=${targetCharsZzz}`)
   console.log(`targetCharsGs=${targetCharsGs} targetCharsSr=${targetCharsSr}`)

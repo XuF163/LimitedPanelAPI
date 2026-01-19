@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
-import { projectRoot } from "../config.js"
+import { loadAppConfig } from "../user-config.js"
+import { resolveZzzLocalPluginRoot, resolveZzzMapDir } from "../zzz/source.js"
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"))
@@ -30,8 +31,33 @@ let cached = null
 
 function loadMaps() {
   if (cached) return cached
-  const yunzaiRoot = path.resolve(projectRoot, "..", "..")
-  const mapDir = path.join(yunzaiRoot, "plugins", "ZZZ-Plugin", "resources", "map")
+  const { data: cfg } = loadAppConfig()
+  let mapDir = resolveZzzMapDir(cfg)
+
+  let required = [
+    path.join(mapDir, "EquipScore.json"),
+    path.join(mapDir, "Property2Name.json"),
+    path.join(mapDir, "EquipBaseValue.json")
+  ]
+  let missing = required.filter((p) => !fs.existsSync(p))
+  if (missing.length) {
+    const localRoot = resolveZzzLocalPluginRoot(cfg)
+    const fallbackDir = path.join(localRoot, "resources", "map")
+    required = [
+      path.join(fallbackDir, "EquipScore.json"),
+      path.join(fallbackDir, "Property2Name.json"),
+      path.join(fallbackDir, "EquipBaseValue.json")
+    ]
+    missing = required.filter((p) => !fs.existsSync(p))
+    if (missing.length) {
+      const hint =
+        `[zzz] missing map files under: ${mapDir}\n` +
+        `missing: ${missing.join(", ")}\n` +
+        `hint: set config zzz.source.type=github (or install Yunzai/plugins/ZZZ-Plugin)`
+      throw new Error(hint)
+    }
+    mapDir = fallbackDir
+  }
 
   const equipScoreByName = readJson(path.join(mapDir, "EquipScore.json"))
   const property2Name = readJson(path.join(mapDir, "Property2Name.json"))

@@ -8,6 +8,8 @@ import { buildGsCharCfg, calcGsBuildMark } from "../score/gs.js"
 import { calcSrBuildMark, getSrWeights } from "../score/sr.js"
 import { calcZzzAvatarMark, buildZzzExtremeEquipList } from "../score/zzz.js"
 import { buildZzzBestWeapon } from "../zzz/weapon.js"
+import { ensureZzzSource } from "../zzz/source.js"
+import { loadAppConfig } from "../user-config.js"
 import { ensureDir, writeJson } from "../utils/fs.js"
 
 function parseArgs(argv) {
@@ -384,6 +386,9 @@ export async function cmdPresetGenerate(argv) {
   }
 
   if (args.game === "zzz") {
+    const { data: cfg } = loadAppConfig()
+    await ensureZzzSource(cfg)
+
     const outPath = args.out || path.join(paths.outDir("zzz"), `${args.uid}.json`)
     await ensureDir(path.dirname(outPath))
 

@@ -129,7 +129,11 @@ async function main() {
   const testTimeoutMs = Math.max(1000, toInt(process.env.PROXY_TEST_TIMEOUT_MS, 5000))
   const testUrl = String(process.env.PROXY_TEST_URL || `https://enka.network/api/${game === "sr" ? "hsr/" : ""}uid/100000001`)
 
-  const dbPath = path.join(projectRoot, "data", `scan.proxytest.${game}.${Date.now()}.sqlite`)
+  const dbPath = path.resolve(
+    process.env.SCAN_DB_PATH ||
+      process.env.PROXYTEST_DB_PATH ||
+      path.join(projectRoot, "data", `scan.proxytest.${game}.sqlite`)
+  )
   for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
     try { if (fs.existsSync(p)) await fsp.rm(p, { force: true }) } catch {}
   }
@@ -211,4 +215,3 @@ main().catch((err) => {
   console.error(err?.stack || err)
   process.exitCode = 1
 })
-

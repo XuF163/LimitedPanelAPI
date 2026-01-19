@@ -2,10 +2,14 @@ game: gs
 
 server:
   port: 4567
+  host: 0.0.0.0
   enabled: true
 
 meta:
   autoSync: true
+  # 原神/崩铁 meta 来源：CNB（qsyhh_res/meta）
+  # - 分支：meta-gs / meta-sr
+  # - 由 src/meta/sync.js 自动拉取到 resources/meta-gs & resources/meta-sr
 
 samples:
   # "playerdata" | "enka"
@@ -49,6 +53,23 @@ preset:
   name: 极限面板
   alwaysGenerate: true
   limitChars: 0
+
+# 绝区零（ZZZ）源数据（用于：Enka -> 面板转换、驱动盘评分/强化规则、专武识别等）
+zzz:
+  source:
+    # yunzai-plugin: 使用本地 Yunzai 的 plugins/ZZZ-Plugin
+    # github: 自动从 GitHub 拉取 ZZZ-Plugin 到本项目 resources 目录
+    type: yunzai-plugin
+
+    # type=yunzai-plugin 时生效；留空则默认：<YunzaiRoot>/plugins/ZZZ-Plugin
+    pluginDir: ""
+
+    # type=github 时生效
+    github:
+      repo: https://github.com/ZZZure/ZZZ-Plugin.git
+      ref: main
+      dir: ./resources/zzz-plugin
+      autoSync: true
 
 # 代理（v2ray-core，可选）
 proxy:
@@ -103,6 +124,10 @@ qa:
   # ZZZ 的预设 UID（8 位）
   uidZzz: "10000000"
   scan:
+    # QA 扫描使用的 SQLite（避免每次跑脚本生成一堆 scan.qa.*.sqlite）
+    dbPath: ./data/scan.qa.sqlite
+    # 每次运行是否重置（删除旧 DB 文件；建议开启保证结果独立）
+    dbReset: true
     # 批次大小（每批调用一次 sample:collect）
     batchSize: 2000
     # 每次 sample:collect 的实际 count（用于更频繁输出进度；<= batchSize）

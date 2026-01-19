@@ -1,6 +1,8 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { enka, projectRoot } from "../config.js"
+import { enka } from "../config.js"
+import { loadAppConfig } from "../user-config.js"
+import { ensureZzzSource } from "../zzz/source.js"
 
 export class EnkaHttpError extends Error {
   constructor(uid, status, body) {
@@ -27,8 +29,11 @@ function ensureGlobalLogger() {
 
 async function loadZzzEnkaFormatter() {
   ensureGlobalLogger()
-  const yunzaiRoot = path.resolve(projectRoot, "..", "..")
-  const filePath = path.join(yunzaiRoot, "plugins", "ZZZ-Plugin", "model", "Enka", "formater.js")
+  const { data: cfg } = loadAppConfig()
+  const resolved = await ensureZzzSource(cfg).catch((e) => {
+    throw new Error(`[zzz] missing source for formatter.js: ${e?.message || String(e)}`)
+  })
+  const filePath = path.join(resolved.pluginRoot, "model", "Enka", "formater.js")
   return await import(pathToFileURL(filePath).href)
 }
 

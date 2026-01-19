@@ -1,7 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { projectRoot } from "../config.js"
+import { loadAppConfig } from "../user-config.js"
+import { ensureZzzSource, resolveZzzLocalPluginRoot, resolveZzzMapDir } from "./source.js"
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"))
@@ -39,13 +40,35 @@ let _mapsCache
 function loadZzzMaps() {
   if (_mapsCache) return _mapsCache
 
-  const yunzaiRoot = path.resolve(projectRoot, "..", "..")
-  const mapDir = path.join(yunzaiRoot, "plugins", "ZZZ-Plugin", "resources", "map")
+  const { data: cfg } = loadAppConfig()
+  let mapDir = resolveZzzMapDir(cfg)
+  let required = [
+    path.join(mapDir, "WeaponId2Data.json"),
+    path.join(mapDir, "PartnerId2Data.json")
+  ]
+  let missing = required.filter((p) => !fs.existsSync(p))
+  if (missing.length) {
+    const localRoot = resolveZzzLocalPluginRoot(cfg)
+    const fallbackDir = path.join(localRoot, "resources", "map")
+    required = [
+      path.join(fallbackDir, "WeaponId2Data.json"),
+      path.join(fallbackDir, "PartnerId2Data.json")
+    ]
+    missing = required.filter((p) => !fs.existsSync(p))
+    if (missing.length) {
+      const hint =
+        `[zzz] missing map files under: ${mapDir}\n` +
+        `missing: ${missing.join(", ")}\n` +
+        `hint: set config zzz.source.type=github (or install Yunzai/plugins/ZZZ-Plugin)`
+      throw new Error(hint)
+    }
+    mapDir = fallbackDir
+  }
 
   const weaponById = readJson(path.join(mapDir, "WeaponId2Data.json"))
   const partnerById = readJson(path.join(mapDir, "PartnerId2Data.json"))
 
-  _mapsCache = { yunzaiRoot, weaponById, partnerById }
+  _mapsCache = { mapDir, weaponById, partnerById }
   return _mapsCache
 }
 
@@ -117,8 +140,11 @@ export function findZzzSignatureWeaponId(metaAvatar) {
 let _formatterPromise
 async function loadZzzEnkaFormatter() {
   if (_formatterPromise) return await _formatterPromise
-  const { yunzaiRoot } = loadZzzMaps()
-  const filePath = path.join(yunzaiRoot, "plugins", "ZZZ-Plugin", "model", "Enka", "formater.js")
+  const { data: cfg } = loadAppConfig()
+  const resolved = await ensureZzzSource(cfg).catch((e) => {
+    throw new Error(`[zzz] missing source for formatter.js: ${e?.message || String(e)}`)
+  })
+  const filePath = path.join(resolved.pluginRoot, "model", "Enka", "formater.js")
   _formatterPromise = import(pathToFileURL(filePath).href)
   return await _formatterPromise
 }
@@ -161,4 +187,3 @@ export async function buildZzzBestWeapon(metaAvatar, { preferSignature = true } 
 
   return { weapon: metaAvatar?.weapon || null, signature: false, signatureWeaponId }
 }
-

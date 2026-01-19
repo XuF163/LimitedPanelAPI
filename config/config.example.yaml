@@ -2,6 +2,7 @@ game: gs
 
 server:
   port: 4567
+  host: 0.0.0.0
   enabled: true
 
 meta:
@@ -41,6 +42,23 @@ preset:
   alwaysGenerate: true
   limitChars: 0
 
+# 绝区零（ZZZ）源数据（用于：Enka -> 面板转换、驱动盘评分/强化规则、专武识别等）
+zzz:
+  source:
+    # yunzai-plugin: 使用本地 Yunzai 的 plugins/ZZZ-Plugin
+    # github: 自动从 GitHub 拉取 ZZZ-Plugin 到本项目 resources 目录
+    type: yunzai-plugin
+
+    # type=yunzai-plugin 时生效；留空则默认：<YunzaiRoot>/plugins/ZZZ-Plugin
+    pluginDir: ""
+
+    # type=github 时生效
+    github:
+      repo: https://github.com/ZZZure/ZZZ-Plugin.git
+      ref: main
+      dir: ./resources/zzz-plugin
+      autoSync: true
+
 # 代理（v2ray-core，可选）
 proxy:
   enabled: false
@@ -76,6 +94,10 @@ qa:
   uid: "100000000"
   uidZzz: "10000000"
   scan:
+    # QA 扫描使用的 SQLite（避免每次跑脚本生成一堆 scan.qa.*.sqlite）
+    dbPath: ./data/scan.qa.sqlite
+    # 每次运行是否重置（删除旧 DB 文件；建议开启保证结果独立）
+    dbReset: true
     batchSize: 2000
     stepSize: 200
     delayMs: 3000

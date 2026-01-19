@@ -4,6 +4,20 @@
 - 默认配置：`config/defSet.yaml`（请勿直接修改，更新时可能被覆盖）
 - 用户配置：`config/config.yaml`（不存在时，首次启动会自动从默认配置复制生成；也可参考 `config/config.example.yaml`）
 
+## HTTP 服务（托管极限面板 JSON）
+
+配置项：
+- `server.enabled`: 是否启动 HTTP 服务
+- `server.host`: 监听地址（默认 `0.0.0.0`）
+- `server.port`: 端口（默认 `4567`）
+
+接口：
+- `GET /healthz`: 健康检查
+- `GET /gs/hyperpanel`: 原神极限面板（默认 UID：`preset.uid`，通常为 `100000000`）
+- `GET /sr/hyperpanel`: 崩铁极限面板（默认 UID：`preset.uid`，通常为 `100000000`）
+- `GET /zzz/hyperpanel`: 绝区零极限面板（默认 UID：`qa.uidZzz`，通常为 `10000000`）
+- `GET /presets/<game>/<uid>.json`: 精确指定游戏与 UID（兼容旧路径）
+
 ## 数据源选择（采样来源）
 
 在 `config/config.yaml` 中设置：
@@ -20,6 +34,19 @@ Enka 扫描状态与（可选）原始响应默认写入 `data/scan.sqlite`（�
 - `samples.enka.saveRawFile`：是否额外写 `data/raw/<game>/<uid>.json`（大规模扫描不建议）
 - `samples.enka.retryFirst`：每次启动优先重试的 UID 数（来自 SQLite 的失败队列）
 - `samples.enka.circuitBreaker.*`：简易熔断（避免上游整体不可用时浪费时间）
+
+注意：`scripts/qa-flow.js` 默认使用 `qa.scan.dbPath`（默认 `data/scan.qa.sqlite`）并在每次运行前重置，避免生成大量 `scan.qa.*.sqlite` 测试库文件。
+
+## ZZZ 源数据
+
+ZZZ 的面板转换/评分依赖 `ZZZ-Plugin` 的资源（如 `resources/map/*.json` 以及 `model/Enka/formater.js`）。
+
+配置项：
+- `zzz.source.type`：
+  - `yunzai-plugin`：使用本地 `Yunzai/plugins/ZZZ-Plugin`（默认）
+  - `github`：从 GitHub 拉取 `ZZZure/ZZZ-Plugin` 到 `temp/LimitedPanelAPI/resources/zzz-plugin` 并使用
+- `zzz.source.pluginDir`：当 `type=yunzai-plugin` 时，可自定义插件目录（留空自动使用默认路径）
+- `zzz.source.github.*`：当 `type=github` 时，配置仓库/分支/拉取目录与自动更新
 
 ## 代理（v2ray-core，可选）
 
