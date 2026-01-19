@@ -35,7 +35,10 @@ samples:
     concurrency: 1
     # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
     retryFirst: 5
-    delayMs: 30000
+    # 有代理时：这是“每个代理桶”的请求间隔
+    delayMs: 20000
+    # 无代理/无可用节点时：全局限速（跨 gs/sr/zzz、跨进程），避免直连触发 429
+    noProxyDelayMs: 20000
     jitterMs: 2000
     # 单次请求超时时间（毫秒）。为空/0 则使用默认值。
     timeoutMs: 15000

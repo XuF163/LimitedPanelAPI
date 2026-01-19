@@ -33,6 +33,7 @@ Enka 扫描状态与（可选）原始响应默认写入 `data/scan.sqlite`（�
 - `samples.enka.storeRawDb`：是否把 raw 响应（gzip）写入 SQLite（大规模扫描建议开启）
 - `samples.enka.saveRawFile`：是否额外写 `data/raw/<game>/<uid>.json`（大规模扫描不建议）
 - `samples.enka.retryFirst`：每次启动优先重试的 UID 数（来自 SQLite 的失败队列）
+- `samples.enka.noProxyDelayMs`：无代理/无可用节点时的全局限速（跨 gs/sr/zzz、跨进程；例如 20000=20 秒 1 次请求）
 - `samples.enka.circuitBreaker.*`：简易熔断（避免上游整体不可用时浪费时间）
 
 注意：`scripts/qa-flow.js` 默认使用 `qa.scan.dbPath`（默认 `data/scan.qa.sqlite`）并在每次运行前重置，避免生成大量 `scan.qa.*.sqlite` 测试库文件。

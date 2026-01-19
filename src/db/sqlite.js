@@ -20,6 +20,9 @@ export function openScanDb({ dbPath } = {}) {
   const db = new DatabaseSync(resolved)
   db.exec("PRAGMA journal_mode = WAL;")
   db.exec("PRAGMA synchronous = NORMAL;")
+  // Avoid "database is locked" errors when multiple processes share the same scan DB
+  // (e.g. gs/sr/zzz running together without proxy).
+  db.exec("PRAGMA busy_timeout = 8000;")
 
   const tableInfo = (name) => {
     try {
@@ -114,6 +117,12 @@ export function openScanDb({ dbPath } = {}) {
       next_uid INTEGER,
       updated_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS rate_limit (
+      name TEXT PRIMARY KEY,
+      next_at INTEGER,
+      updated_at INTEGER
+    );
   `)
 
   const stmtGet = db.prepare(`SELECT * FROM enka_uid WHERE game = ? AND uid = ?`)
@@ -140,6 +149,15 @@ export function openScanDb({ dbPath } = {}) {
     VALUES (?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       next_uid=excluded.next_uid,
+      updated_at=excluded.updated_at
+  `)
+
+  const stmtGetRateLimit = db.prepare(`SELECT name, next_at, updated_at FROM rate_limit WHERE name = ?`)
+  const stmtUpsertRateLimit = db.prepare(`
+    INSERT INTO rate_limit (name, next_at, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      next_at=excluded.next_at,
       updated_at=excluded.updated_at
   `)
   const stmtListDueRetry = db.prepare(`
@@ -244,7 +262,34 @@ export function openScanDb({ dbPath } = {}) {
     return (rows || []).map((r) => Number(r.uid)).filter((v) => Number.isFinite(v))
   }
 
+  // Reserve a slot in a shared (cross-process) rate limiter.
+  // Returns how long the caller should wait before performing the action.
+  const reserveRateLimit = (name, intervalMs, { now = nowMs() } = {}) => {
+    const ms = Math.max(0, Number(intervalMs) || 0)
+    if (!ms) return { waitMs: 0, nextAt: null }
+    const key = String(name || "").trim()
+    if (!key) return { waitMs: 0, nextAt: null }
+
+    let waitMs = 0
+    let nextAt = null
+
+    db.exec("BEGIN IMMEDIATE;")
+    try {
+      const row = stmtGetRateLimit.get(key) || null
+      const curNextAt = Math.max(0, Number(row?.next_at || 0))
+      waitMs = Math.max(0, curNextAt - now)
+      nextAt = Math.max(curNextAt, now) + ms
+      stmtUpsertRateLimit.run(key, nextAt, nowMs())
+      db.exec("COMMIT;")
+    } catch (e) {
+      try { db.exec("ROLLBACK;") } catch {}
+      throw e
+    }
+
+    return { waitMs, nextAt }
+  }
+
   const close = () => db.close()
 
-  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, close }
+  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, reserveRateLimit, close }
 }

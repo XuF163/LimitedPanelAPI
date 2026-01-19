@@ -76,7 +76,7 @@ async function ensureSamples(game, { force = false } = {}) {
   if (!force && !alwaysSample && hasAnySamples(game)) return
 
   if (sampleMode === "enka") {
-    const delayMs = envNum("ENKA_DELAY_MS", cfg?.samples?.enka?.delayMs ?? 30_000)
+    const delayMs = envNum("ENKA_DELAY_MS", cfg?.samples?.enka?.delayMs ?? 20_000)
     const jitterMs = envNum("ENKA_JITTER_MS", cfg?.samples?.enka?.jitterMs ?? 2_000)
     const concurrency = Math.max(1, Math.min(50, envNum("ENKA_CONCURRENCY", cfg?.samples?.enka?.concurrency ?? 1)))
     const maxCount = envNum("ENKA_MAX_COUNT", cfg?.samples?.enka?.maxCount ?? 20)

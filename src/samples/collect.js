@@ -30,7 +30,7 @@ function parseArgs(argv) {
     uidStart: null,
     count: 10,
     maxCount: 20,
-    delayMs: 30_000,
+    delayMs: 20_000,
     jitterMs: 2_000,
     saveRaw: true,
     concurrency: 1,
@@ -158,6 +158,8 @@ export async function cmdSampleCollect(argv) {
   const scanDb = openScanDb()
   const { data: cfg } = loadAppConfig({ ensureUser: false })
   const storeRawDb = cfg?.samples?.enka?.storeRawDb ?? true
+  const noProxyDelayMsCfg = cfg?.samples?.enka?.noProxyDelayMs ?? 20_000
+  const noProxyDelayMs = Math.max(0, envNum("ENKA_NO_PROXY_DELAY_MS", Number(noProxyDelayMsCfg) || 0))
   const breakerMaxConsecutiveFails = Number(cfg?.samples?.enka?.circuitBreaker?.maxConsecutiveFails ?? 5)
   const breakerOn429 = Boolean(cfg?.samples?.enka?.circuitBreaker?.breakOn429 ?? true)
   const quiet = Boolean(args.quiet || envBool("QUIET", false))
@@ -273,7 +275,17 @@ export async function cmdSampleCollect(argv) {
           dispatcher = proxyStates[picked]?.dispatcher
         }
       }
-      await waitTurn(bucket)
+      // Throttle:
+      // - With proxy: bucketed throttling (per proxy) via in-memory scheduler.
+      // - Without proxy: global throttling via sqlite to keep *all games/processes combined*
+      //   at a safe rate (e.g. 1 req / 20s).
+      if (!dispatcher && noProxyDelayMs > 0 && typeof scanDb.reserveRateLimit === "function") {
+        const intervalMs = Math.max(0, Number(args.delayMs) || 0, noProxyDelayMs)
+        const { waitMs } = scanDb.reserveRateLimit("enka:no-proxy:global", intervalMs)
+        if (waitMs > 0) await sleep(waitMs)
+      } else {
+        await waitTurn(bucket)
+      }
 
       if (!quiet) {
         console.log(`[${pos}/${uidList.length}] fetch uid=${uid}${proxyStates.length ? ` proxy=${bucket + 1}/${proxyStates.length}` : ""}`)

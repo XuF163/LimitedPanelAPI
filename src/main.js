@@ -20,9 +20,9 @@ export async function run(argv) {
     default:
       console.log(`Usage:
   node src/cli.js meta:sync [--game gs|sr|all]
-  node src/cli.js sample:collect --game gs --uids 242422996,xxxx [--delayMs 30000]
-  node src/cli.js sample:collect --game sr --uids 100843318,xxxx [--delayMs 30000]
-  node src/cli.js sample:collect --game zzz --uids 10000000,xxxx [--delayMs 30000]
+  node src/cli.js sample:collect --game gs --uids 242422996,xxxx [--delayMs 20000]
+  node src/cli.js sample:collect --game sr --uids 100843318,xxxx [--delayMs 20000]
+  node src/cli.js sample:collect --game zzz --uids 10000000,xxxx [--delayMs 20000]
   node src/cli.js preset:generate --game gs [--uid 100000000]
   node src/cli.js preset:generate --game sr [--uid 100000000]
   node src/cli.js preset:generate --game zzz [--uid 10000000]
