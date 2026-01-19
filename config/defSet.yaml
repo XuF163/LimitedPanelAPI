@@ -1,19 +1,44 @@
-game: gs
-
 server:
   port: 4567
   host: 0.0.0.0
   enabled: true
+  ui:
+    enabled: true
+    # 默认仅允许本机访问 WebUI（推荐）。如需远程访问，请开启并设置 token。
+    allowRemote: false
+    token: ""
 
 meta:
   autoSync: true
-  # 原神/崩铁 meta 来源：CNB（qsyhh_res/meta）
-  # - 分支：meta-gs / meta-sr
-  # - 由 src/meta/sync.js 自动拉取到 resources/meta-gs & resources/meta-sr
+  autoUpdate:
+    # 每隔一段时间自动同步 meta（git fetch/reset，相当于“每天 pull 一次”）
+    enabled: false
+    intervalSec: 86400
+  # GS/SR meta 来源选择：
+  # - cnb：从 CNB（qsyhh_res/meta）拉取（默认）
+  # - miao-plugin：从 miao-plugin 仓库/目录拷贝 resources/meta-gs & resources/meta-sr
+  source:
+    type: cnb
+
+    cnb:
+      repo: https://cnb.cool/qsyhh_res/meta.git
+      branch:
+        gs: meta-gs
+        sr: meta-sr
+
+    miaoPlugin:
+      # miao-plugin 根目录（你自己 clone 下来的目录）。
+      # 为空则会尝试自动使用：<YunzaiRoot>/plugins/miao-plugin
+      dir: ""
+      # 当 dir 为空且本机不存在 miao-plugin 时，会 clone 到这里再取 meta：
+      git:
+        repo: https://github.com/yoimiya-kokomi/miao-plugin.git
+        ref: master
+        dir: ./resources/miao-plugin
 
 samples:
   # "playerdata" | "enka"
-  mode: playerdata
+  mode: enka
   alwaysSample: true
 
   playerdata:
@@ -23,16 +48,26 @@ samples:
     maxFiles: 0
 
   enka:
-    # 两种方式二选一：
-    # 1) uids: [242422996, ...]
-    uids: []
-    # 2) uidStart + uidEnd（会被 maxCount 截断，避免扫描超大范围导致 OOM）
-    uidStart: null
-    uidEnd: null
+    # UID 选择：分游戏配置（GS/SR=9 位；ZZZ=8 位）
+    gs:
+      # 两种方式二选一：
+      # 1) uids: [242422996, ...]
+      uids: []
+      # 2) uidStart + uidEnd（会被 maxCount 截断，避免扫描超大范围导致 OOM）
+      uidStart: null
+      uidEnd: null
+    sr:
+      uids: []
+      uidStart: null
+      uidEnd: null
+    zzz:
+      uids: []
+      uidStart: null
+      uidEnd: null
 
-    maxCount: 20
+    maxCount: 200000
     # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
-    concurrency: 1
+    concurrency: 200
     # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
     retryFirst: 5
     # 有代理时：这是“每个代理桶”的请求间隔
@@ -51,11 +86,28 @@ samples:
       maxConsecutiveFails: 5
       breakOn429: true
 
+    # 定期重扫：用于“刷新样本 -> 更新极限面板”（仅对已扫描过、且超过一定时间未更新的 UID 生效）
+    rescan:
+      enabled: false
+      # 认为“过期”的最小间隔（秒）。例如 86400=一天
+      afterSec: 86400
+      # 每次运行优先重扫多少个 UID（按 last_checked_at 最旧优先）
+      first: 20000
+
 preset:
   uid: "100000000"
   name: 极限面板
   alwaysGenerate: true
   limitChars: 0
+  autoRefresh:
+    # 周期性执行：采样（samples）+ 生成（preset），用于持续更新 out/<game>/<uid>.json
+    enabled: false
+    # 间隔（秒）。例如 3600=每小时
+    intervalSec: 3600
+    # 是否在进程启动后立刻跑一次（不建议；start.js 本身已经会跑一轮）
+    runOnStart: false
+    # 强制执行（忽略 samples.alwaysSample / preset.alwaysGenerate）
+    force: true
 
 # 绝区零（ZZZ）源数据（用于：Enka -> 面板转换、驱动盘评分/强化规则、专武识别等）
 zzz:

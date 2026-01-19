@@ -5,13 +5,7 @@
   "description": "极限面板 JSON 生成服务端",
   "type": "module",
   "scripts": {
-    "start": "node src/start.js",
-    "serve": "node src/server.js",
-    "cli": "node src/cli.js",
-    "meta:sync": "node src/cli.js meta:sync",
-    "sample:collect": "node src/cli.js sample:collect",
-    "preset:generate": "node src/cli.js preset:generate",
-    "score:calc": "node src/cli.js score:calc"
+    "start": "node src/start.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",

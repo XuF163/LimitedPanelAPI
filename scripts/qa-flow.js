@@ -473,9 +473,14 @@ async function main() {
   const maxUidsGs = Math.max(0, toInt(process.env.MAX_UIDS_GS, Number(qaScanGs?.maxUids ?? cfg?.samples?.enka?.maxCount ?? 2000)))
   const maxUidsSr = Math.max(0, toInt(process.env.MAX_UIDS_SR, Number(qaScanSr?.maxUids ?? cfg?.samples?.enka?.maxCount ?? 2000)))
   const maxUidsZzz = Math.max(0, toInt(process.env.MAX_UIDS_ZZZ, Number(qaScanZzz?.maxUids ?? 500)))
-  const uidStartGs = toInt(process.env.UID_START_GS, Number(qaScanGs?.uidStart ?? cfg?.samples?.enka?.uidStart ?? 100000001))
-  const uidStartSr = toInt(process.env.UID_START_SR, Number(qaScanSr?.uidStart ?? cfg?.samples?.enka?.uidStart ?? 100000001))
-  const uidStartZzz = toInt(process.env.UID_START_ZZZ, Number(qaScanZzz?.uidStart ?? 10000000))
+  const cfgEnka = cfg?.samples?.enka || {}
+  const cfgEnkaGs = cfgEnka?.gs || {}
+  const cfgEnkaSr = cfgEnka?.sr || {}
+  const cfgEnkaZzz = cfgEnka?.zzz || {}
+
+  const uidStartGs = toInt(process.env.UID_START_GS, Number(qaScanGs?.uidStart ?? cfgEnkaGs?.uidStart ?? cfgEnka?.uidStart ?? 100000001))
+  const uidStartSr = toInt(process.env.UID_START_SR, Number(qaScanSr?.uidStart ?? cfgEnkaSr?.uidStart ?? cfgEnka?.uidStart ?? 100000001))
+  const uidStartZzz = toInt(process.env.UID_START_ZZZ, Number(qaScanZzz?.uidStart ?? cfgEnkaZzz?.uidStart ?? 10000000))
 
   const targetCharsGs = Math.max(0, toInt(process.env.TARGET_CHARS_GS, Number(qaScanGs?.targetChars ?? 80)))
   const targetCharsSr = Math.max(0, toInt(process.env.TARGET_CHARS_SR, Number(qaScanSr?.targetChars ?? 60)))

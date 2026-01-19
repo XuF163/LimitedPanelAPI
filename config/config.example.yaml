@@ -1,139 +1,43 @@
-game: gs
+# 仅需：npm start + WebUI 配置
+# - 首次启动会自动生成 config/config.yaml（精简版）
+# - 可直接复制本文件为 config/config.yaml 后再启动
 
 server:
-  port: 4567
   host: 0.0.0.0
+  port: 4567
   enabled: true
 
+# GS/SR meta 来源：cnb | miao-plugin
 meta:
-  autoSync: true
+  source:
+    type: cnb
+    # type=miao-plugin 时可指定目录（可留空，WebUI 可配置）
+    miaoPlugin:
+      dir: ''
 
-# 采样数据源选择
 samples:
-  # "playerdata" | "enka"
-  mode: enka
-  alwaysSample: true
-
-  # Enka UID 扫描范围（会被 maxCount 截断，避免一次扫描过大导致耗时/封禁/炸内存）
+  # playerdata | enka
+  mode: playerdata
+  playerdata:
+    dir: ''
   enka:
-    uidStart: 100000001
-    uidEnd: 242422996
-    # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
-    concurrency: 1
-    # 单次运行最多扫描多少个 UID（建议保持小一些，多次运行逐步推进）
+    # UID 范围分游戏配置（GS/SR=9 位；ZZZ=8 位）
+    gs:
+      uids: []
+      uidStart: null
+      uidEnd: null
+    sr:
+      uids: []
+      uidStart: null
+      uidEnd: null
+    zzz:
+      uids: []
+      uidStart: null
+      uidEnd: null
     maxCount: 20
-    # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
-    retryFirst: 5
-    # 有代理时：这是“每个代理桶”的请求间隔（毫秒）
-    delayMs: 20000
-    # 无代理/无可用节点时：全局限速（跨 gs/sr/zzz、跨进程）
-    noProxyDelayMs: 20000
-    jitterMs: 0
-    timeoutMs: 15000
-
-    # 推荐：raw 写 SQLite（gzip），不要再落盘成大量 json 小文件
-    storeRawDb: true
-    saveRawFile: false
-    circuitBreaker:
-      maxConsecutiveFails: 5
-      breakOn429: true
+    concurrency: 1
 
 preset:
-  uid: "100000000"
+  # gs/sr 默认 100000000；zzz 默认 10000000（由程序自动处理）
+  uid: '100000000'
   name: 极限面板
-  alwaysGenerate: true
-  limitChars: 0
-
-# 绝区零（ZZZ）源数据（用于：Enka -> 面板转换、驱动盘评分/强化规则、专武识别等）
-zzz:
-  source:
-    # yunzai-plugin: 使用本地 Yunzai 的 plugins/ZZZ-Plugin
-    # github: 自动从 GitHub 拉取 ZZZ-Plugin 到本项目 resources 目录
-    type: yunzai-plugin
-
-    # type=yunzai-plugin 时生效；留空则默认：<YunzaiRoot>/plugins/ZZZ-Plugin
-    pluginDir: ""
-
-    # type=github 时生效
-    github:
-      repo: https://github.com/ZZZure/ZZZ-Plugin.git
-      ref: main
-      dir: ./resources/zzz-plugin
-      autoSync: true
-
-# 代理（v2ray-core，可选）
-proxy:
-  enabled: false
-  required: false
-  db:
-    # 留空则默认：./data/proxy.sqlite
-    path: ""
-  v2ray:
-    downloadUrl: https://github.com/v2fly/v2ray-core/releases/download/v5.44.1/v2ray-windows-64.zip
-    binDir: ./bin/v2ray
-    logLevel: warning
-    basePort: 17890
-    # 默认关闭：避免在项目目录生成大量 v2ray 配置 json
-    keepConfigFiles: false
-  subscription:
-    urls:
-      # - https://example.com/subscription
-    timeoutMs: 30000
-    useCacheOnFail: true
-    cacheDir: ./data/proxy/subscription-cache
-    cacheTtlSec: 0
-    maxNodes: 3
-    probeCount: 20
-    probeRounds: 3
-    pickStrategy: spread
-    testUrl: https://enka.network/api/uid/100000001
-    testTimeoutMs: 8000
-    startConcurrency: 6
-    maxConsecutiveFails: 30
-
-qa:
-  games: [gs, sr]
-  uid: "100000000"
-  uidZzz: "10000000"
-  scan:
-    # QA 扫描使用的 SQLite（避免每次跑脚本生成一堆 scan.qa.*.sqlite）
-    dbPath: ./data/scan.qa.sqlite
-    # 每次运行是否重置（删除旧 DB 文件；建议开启保证结果独立）
-    dbReset: true
-    batchSize: 2000
-    stepSize: 200
-    delayMs: 3000
-    concurrency: 20
-    enkaTimeoutMs: 15000
-    gs:
-      uidStart: 100000001
-      maxUids: 2000
-      targetChars: 80
-    sr:
-      uidStart: 100000001
-      maxUids: 2000
-      targetChars: 60
-    zzz:
-      uidStart: 10000000
-      maxUids: 500
-      targetChars: 20
-  verify:
-    # diff: 对比我方评分 vs liangshi 评分的绝对差
-    # miao: 统一用 miao-plugin 的圣遗物评分，做阈值合格率统计
-    mode: miao
-    gs:
-      threshold: 300
-      tolerance: 5
-      minCommon: 10
-      passRate: 0.8
-    sr:
-      threshold: 300
-      tolerance: 500
-      minCommon: 10
-      passRate: 0.5
-    zzz:
-      minMark: 590
-      requireSignature: true
-      requirePattern: true
-      minAvatars: 5
-      passRate: 1

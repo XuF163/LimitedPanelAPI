@@ -9,6 +9,7 @@ import { collectPlayerDataSamples } from "./samples/collect-playerdata.js"
 import { cmdPresetGenerate } from "./preset/generate.js"
 import { openScanDb } from "./db/sqlite.js"
 import { ensureProxyPool } from "./proxy/pool.js"
+import { startServer } from "./server.js"
 
 function toList(value) {
   if (Array.isArray(value)) {
@@ -42,6 +43,30 @@ function envList(name, fallback = []) {
   return toList(raw)
 }
 
+function getEnkaUidSelector(cfg, game) {
+  const enkaCfg = cfg?.samples?.enka || {}
+  const gameCfg = enkaCfg?.[game] || {}
+  const upper = String(game || "").toUpperCase()
+
+  // Backward compatible priority:
+  // - env per-game (ENKA_UIDS_GS) > env global (ENKA_UIDS) > config per-game (samples.enka.gs) > config legacy (samples.enka)
+  let uids = envList("ENKA_UIDS", gameCfg?.uids ?? enkaCfg?.uids ?? [])
+  uids = envList(`ENKA_UIDS_${upper}`, uids)
+
+  let uidStart = envNum("ENKA_UID_START", gameCfg?.uidStart ?? enkaCfg?.uidStart ?? null)
+  uidStart = envNum(`ENKA_UID_START_${upper}`, uidStart)
+
+  let uidEnd = envNum("ENKA_UID_END", gameCfg?.uidEnd ?? enkaCfg?.uidEnd ?? null)
+  uidEnd = envNum(`ENKA_UID_END_${upper}`, uidEnd)
+
+  let countCfg = envNum("ENKA_COUNT", null)
+  countCfg = envNum(`ENKA_COUNT_${upper}`, countCfg)
+
+  const configured = uids.length > 0 || (Number.isFinite(uidStart) && (Number.isFinite(uidEnd) || Number.isFinite(countCfg)))
+
+  return { uids, uidStart, uidEnd, countCfg, configured }
+}
+
 function hasAnySamples(game) {
   const dir = paths.samplesDir(game)
   if (!fs.existsSync(dir)) return false
@@ -49,15 +74,45 @@ function hasAnySamples(game) {
   return files.length > 0
 }
 
-function hasMeta(game) {
+function normalizeMetaSourceType(t) {
+  const s = String(t || "").trim().toLowerCase()
+  if ([ "miao-plugin", "miaoplugin", "miao" ].includes(s)) return "miao-plugin"
+  return "cnb"
+}
+
+function readMetaMarker(metaRoot) {
+  try {
+    const p = path.join(metaRoot, ".meta-source.json")
+    if (!fs.existsSync(p)) return null
+    return JSON.parse(fs.readFileSync(p, "utf8"))
+  } catch {
+    return null
+  }
+}
+
+function hasMeta(game, cfg) {
   if (game === "zzz") return true
   const root = game === "gs" ? paths.metaGs : paths.metaSr
-  return fs.existsSync(path.join(root, "artifact", "data.json")) && fs.existsSync(path.join(root, "character", "data.json"))
+
+  const mustHave =
+    game === "gs"
+      ? [ path.join(root, "artifact", "data.json"), path.join(root, "character", "data.json") ]
+      : [ path.join(root, "artifact", "meta.json"), path.join(root, "character", "data.json") ]
+
+  if (!mustHave.every((p) => fs.existsSync(p))) return false
+
+  // Require a meta marker so switching meta.source.type will take effect automatically.
+  const desiredType = normalizeMetaSourceType(cfg?.meta?.source?.type || "cnb")
+  const marker = readMetaMarker(root)
+  if (!marker || normalizeMetaSourceType(marker?.type) !== desiredType) return false
+
+  return true
 }
 
 async function ensureMeta(game, { force = false } = {}) {
+  const { data: cfg } = loadAppConfig({ ensureUser: false })
   if (game === "zzz") return
-  if (!force && hasMeta(game)) return
+  if (!force && hasMeta(game, cfg)) return
   console.log(`[auto] meta:sync --game ${game}`)
   await cmdMetaSync([ "--game", game ])
 }
@@ -65,13 +120,10 @@ async function ensureMeta(game, { force = false } = {}) {
 async function ensureSamples(game, { force = false } = {}) {
   const { data: cfg } = loadAppConfig()
 
-  const enkaUids = envList("ENKA_UIDS", cfg?.samples?.enka?.uids || [])
-  const sampleMode = (process.env.SAMPLE_MODE || cfg?.samples?.mode || (enkaUids.length ? "enka" : "playerdata")).toLowerCase()
+  const { uids: enkaUids, uidStart, uidEnd, countCfg, configured: enkaConfigured } = getEnkaUidSelector(cfg, game)
+  const cfgModeRaw = (process.env.SAMPLE_MODE || cfg?.samples?.mode || (enkaConfigured ? "enka" : "playerdata")).toLowerCase()
+  const sampleMode = game === "zzz" ? "enka" : cfgModeRaw
   const alwaysSample = envBool("SAMPLE_ALWAYS", cfg?.samples?.alwaysSample ?? true)
-
-  if (game === "zzz" && sampleMode !== "enka") {
-    throw new Error(`GAME=zzz only supports SAMPLE_MODE=enka for now`)
-  }
 
   if (!force && !alwaysSample && hasAnySamples(game)) return
 
@@ -84,20 +136,41 @@ async function ensureSamples(game, { force = false } = {}) {
     const saveRaw = envBool("ENKA_NO_RAW", false) ? false : cfgSaveRawFile
 
     // Prefer explicit uid list; fallback to range/count.
-    const uidStart = envNum("ENKA_UID_START", cfg?.samples?.enka?.uidStart ?? null)
-    const uidEnd = envNum("ENKA_UID_END", cfg?.samples?.enka?.uidEnd ?? null)
-    const countCfg = envNum("ENKA_COUNT", null)
+    if (!enkaConfigured) {
+      const upper = String(game || "").toUpperCase()
+      console.warn(
+        `[auto] sample:collect (enka) skipped game=${game} (no uid list/range configured; set ENKA_UIDS_${upper}/ENKA_UID_START_${upper} or config.samples.enka.${game})`
+      )
+      return
+    }
 
     const argv = [ "--game", game ]
 
     if (enkaUids.length > 0) {
+      if (game === "zzz") {
+        const ok = enkaUids.filter((u) => /^\d{8}$/.test(String(u)))
+        if (ok.length === 0) {
+          console.warn(`[auto] sample:collect (enka) skipped game=zzz (ENKA_UIDS must be 8-digit)`)
+          return
+        }
+        if (ok.length !== enkaUids.length) {
+          console.warn(`[auto] sample:collect (enka) game=zzz filtered invalid uids: kept=${ok.length}/${enkaUids.length}`)
+        }
+        console.log(`[auto] sample:collect (enka) uids=${ok.length} delayMs=${delayMs} saveRaw=${saveRaw}`)
+        argv.push("--uids", ok.join(","))
+      } else {
       console.log(`[auto] sample:collect (enka) uids=${enkaUids.length} delayMs=${delayMs} saveRaw=${saveRaw}`)
       argv.push("--uids", enkaUids.join(","))
+      }
     } else if (Number.isFinite(uidStart) && (Number.isFinite(uidEnd) || Number.isFinite(countCfg))) {
       const effectiveMax = Number.isFinite(maxCount) && maxCount > 0 ? maxCount : 20
       if (Number.isFinite(uidEnd)) {
         // Retry due transient failures first (from sqlite state), then continue range scanning.
         const retryFirst = envNum("ENKA_RETRY_FIRST", cfg?.samples?.enka?.retryFirst ?? 0)
+        const rescanCfg = cfg?.samples?.enka?.rescan || {}
+        const rescanEnabled = envBool("ENKA_RESCAN_ENABLED", Boolean(rescanCfg?.enabled ?? false))
+        const rescanAfterSec = envNum("ENKA_RESCAN_AFTER_SEC", Number(rescanCfg?.afterSec ?? 0))
+        const rescanFirst = envNum("ENKA_RESCAN_FIRST", Number(rescanCfg?.first ?? 0))
         let remainingMax = effectiveMax
         if (retryFirst > 0) {
           const db = openScanDb()
@@ -116,6 +189,31 @@ async function ensureSamples(game, { force = false } = {}) {
             remainingMax = Math.max(0, remainingMax - due.length)
           }
         }
+
+        // Periodic rescan: re-fetch oldest successful UIDs in the configured range,
+        // so samples and extreme panels can be refreshed over time.
+        if (remainingMax > 0 && rescanEnabled && rescanAfterSec > 0 && rescanFirst > 0) {
+          const db = openScanDb()
+          let stale = []
+          try {
+            stale = db.listStaleUids(Math.min(rescanFirst, remainingMax), {
+              game,
+              minAgeMs: rescanAfterSec * 1000,
+              uidMin: uidStart,
+              uidMax: uidEnd
+            })
+          } finally {
+            db.close()
+          }
+          if (stale.length > 0) {
+            const rescanArgv = [ "--game", game, "--uids", stale.join(","), "--delayMs", String(delayMs), "--jitterMs", String(jitterMs) ]
+            if (concurrency > 1) rescanArgv.push("--concurrency", String(concurrency))
+            if (!saveRaw) rescanArgv.push("--no-raw")
+            console.log(`[auto] sample:collect (enka) rescan=${stale.length}/${rescanFirst} afterSec=${rescanAfterSec} remainingMax=${remainingMax}`)
+            await cmdSampleCollect(rescanArgv)
+            remainingMax = Math.max(0, remainingMax - stale.length)
+          }
+        }
         if (remainingMax <= 0) return
 
         const resetCursor = envBool("ENKA_CURSOR_RESET", false) || force
@@ -129,6 +227,15 @@ async function ensureSamples(game, { force = false } = {}) {
             if (Number.isFinite(cur?.next_uid)) start = Number(cur.next_uid) || uidStart
           } finally {
             db.close()
+          }
+        }
+
+        if (game === "zzz") {
+          const okStart = start >= 10_000_000 && start <= 99_999_999
+          const okEnd = uidEnd >= 10_000_000 && uidEnd <= 99_999_999
+          if (!okStart || !okEnd) {
+            console.warn(`[auto] sample:collect (enka) skipped game=zzz (uidStart/uidEnd must be 8-digit)`)
+            return
           }
         }
 
@@ -156,6 +263,14 @@ async function ensureSamples(game, { force = false } = {}) {
         return
       }
 
+      if (game === "zzz") {
+        const okStart = uidStart >= 10_000_000 && uidStart <= 99_999_999
+        if (!okStart) {
+          console.warn(`[auto] sample:collect (enka) skipped game=zzz (uidStart must be 8-digit)`)
+          return
+        }
+      }
+
       const countRaw = Math.max(0, countCfg)
       if (countRaw <= 0) {
         throw new Error(`Invalid Enka count (uidStart=${uidStart} count=${countCfg})`)
@@ -163,8 +278,6 @@ async function ensureSamples(game, { force = false } = {}) {
       const count = Math.min(countRaw, effectiveMax)
       console.log(`[auto] sample:collect (enka) uidStart=${uidStart} count=${count} (raw=${countRaw}) delayMs=${delayMs} saveRaw=${saveRaw}`)
       argv.push("--uidStart", String(uidStart), "--count", String(count), "--maxCount", String(count))
-    } else {
-      throw new Error("SAMPLE_MODE=enka requires ENKA_UIDS or (ENKA_UID_START + ENKA_UID_END/ENKA_COUNT) or config.samples.enka")
     }
 
     argv.push("--delayMs", String(delayMs), "--jitterMs", String(jitterMs))
@@ -190,7 +303,10 @@ async function ensurePreset(game, { force = false } = {}) {
   const { data: cfg } = loadAppConfig()
 
   const defaultPresetUid = game === "zzz" ? "10000000" : "100000000"
-  const uid = process.env.PRESET_UID || cfg?.preset?.uid || defaultPresetUid
+  const uid =
+    game === "zzz"
+      ? (process.env.PRESET_UID_ZZZ || cfg?.preset?.uidZzz || defaultPresetUid)
+      : (process.env.PRESET_UID || cfg?.preset?.uid || defaultPresetUid)
   const name = process.env.PRESET_NAME || cfg?.preset?.name || "极限面板"
   const limitChars = envNum("PRESET_LIMIT_CHARS", cfg?.preset?.limitChars ?? 0)
   const outPath = path.join(paths.outDir(game), `${uid}.json`)
@@ -212,8 +328,7 @@ async function ensurePreset(game, { force = false } = {}) {
 async function main() {
   const { data: cfg, userPath } = loadAppConfig()
 
-  const game = (process.env.GAME || cfg?.game || "gs").toLowerCase()
-  if (!["gs", "sr", "zzz"].includes(game)) throw new Error(`Unsupported GAME=${game}`)
+  const games = [ "gs", "sr", "zzz" ]
 
   const port = envNum("PORT", cfg?.server?.port ?? 4567)
   process.env.PORT = String(port)
@@ -223,8 +338,14 @@ async function main() {
 
   console.log(`[auto] project=${projectRoot}`)
   console.log(`[auto] config=${userPath}`)
-  console.log(`[auto] out=${paths.outDir(game)}`)
+  console.log(`[auto] games=${games.join(",")}`)
+  console.log(`[auto] out=${path.join(projectRoot, "out")}`)
   console.log(`[auto] port=${port} force=${force}`)
+
+  // Start HTTP server early so WebUI is available while auto tasks run.
+  if (!noServer) {
+    await startServer({ port })
+  }
 
   // Optional proxy pool (v2ray-core). This sets PROXY_URLS for Enka fetchers.
   const proxyPool = await ensureProxyPool(cfg)
@@ -250,18 +371,106 @@ async function main() {
     }
 
     if (cfg?.meta?.autoSync ?? true) {
-      await ensureMeta(game, { force })
+      for (const g of [ "gs", "sr" ]) {
+        await ensureMeta(g, { force }).catch((e) => console.warn(`[auto] meta:sync failed game=${g}: ${e?.message || String(e)}`))
+      }
     }
-    await ensureSamples(game, { force })
-    await ensurePreset(game, { force })
+
+    for (const g of games) {
+      await ensureSamples(g, { force }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+      await ensurePreset(g, { force }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+    }
   } finally {
     // Proxies are only needed during sampling; close them after preset generation.
     await cleanupProxyPool()
   }
 
-  // Start HTTP server after preset is ready.
+  // In "no server" mode we exit after one auto run.
   if (noServer) return
-  await import("./server.js")
+
+  // Background jobs (best-effort): meta auto-update + periodic refresh (samples -> preset).
+  const bootAt = Date.now()
+  let lastMetaUpdateAt = bootAt
+  let lastRefreshAt = bootAt
+  let running = false
+
+  const tickMs = Math.max(10_000, envNum("AUTO_TICK_MS", 30_000))
+
+  const runMetaUpdate = async () => {
+    const { data: cfg2 } = loadAppConfig({ ensureUser: false })
+    const mu = cfg2?.meta?.autoUpdate || {}
+    const enabled = envBool("META_AUTO_UPDATE", Boolean(mu?.enabled ?? false))
+    if (!enabled) return
+
+    const intervalSec = Math.max(60, envNum("META_AUTO_UPDATE_INTERVAL_SEC", Number(mu?.intervalSec ?? 86400)))
+    const intervalMs = intervalSec * 1000
+    const runOnStart = envBool("META_AUTO_UPDATE_RUN_ON_START", Boolean(mu?.runOnStart ?? false))
+    if (!runOnStart && Date.now() - lastMetaUpdateAt < intervalMs) return
+
+    console.log(`[auto] meta:autoUpdate begin intervalSec=${intervalSec}`)
+    await cmdMetaSync([ "--game", "all" ])
+    lastMetaUpdateAt = Date.now()
+    console.log(`[auto] meta:autoUpdate done`)
+  }
+
+  const runRefresh = async () => {
+    const { data: cfg2 } = loadAppConfig({ ensureUser: false })
+    const ar = cfg2?.preset?.autoRefresh || {}
+    const enabled = envBool("PRESET_AUTO_REFRESH", Boolean(ar?.enabled ?? false))
+    if (!enabled) return
+
+    const intervalSec = Math.max(60, envNum("PRESET_AUTO_REFRESH_INTERVAL_SEC", Number(ar?.intervalSec ?? 3600)))
+    const intervalMs = intervalSec * 1000
+    const runOnStart = envBool("PRESET_AUTO_REFRESH_RUN_ON_START", Boolean(ar?.runOnStart ?? false))
+    const forceRefresh = envBool("PRESET_AUTO_REFRESH_FORCE", Boolean(ar?.force ?? true))
+    if (!runOnStart && Date.now() - lastRefreshAt < intervalMs) return
+
+    console.log(`[auto] preset:autoRefresh begin games=${games.join(",")} intervalSec=${intervalSec} force=${forceRefresh}`)
+
+    // Optional proxy pool only for this refresh cycle.
+    let pool = null
+    try {
+      pool = await ensureProxyPool(cfg2)
+      if (pool?.enabled) {
+        const proxyUrls = Array.isArray(pool.proxyUrls) ? pool.proxyUrls : []
+        if (proxyUrls.length > 0) process.env.PROXY_URLS = proxyUrls.join(",")
+        else delete process.env.PROXY_URLS
+      }
+
+      // Ensure meta exists; meta updates are handled by meta.autoUpdate.
+      if (cfg2?.meta?.autoSync ?? true) {
+        for (const mg of [ "gs", "sr" ]) {
+          await ensureMeta(mg, { force: false }).catch((e) => console.warn(`[auto] meta:sync failed game=${mg}: ${e?.message || String(e)}`))
+        }
+      }
+
+      for (const g of games) {
+        await ensureSamples(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+        await ensurePreset(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+      }
+
+      lastRefreshAt = Date.now()
+      console.log(`[auto] preset:autoRefresh done games=${games.join(",")}`)
+    } finally {
+      try { await pool?.close?.() } catch {}
+    }
+  }
+
+  const tick = async () => {
+    if (running) return
+    running = true
+    try {
+      await runMetaUpdate().catch((e) => console.warn(`[auto] meta:autoUpdate failed: ${e?.message || String(e)}`))
+      await runRefresh().catch((e) => console.warn(`[auto] preset:autoRefresh failed: ${e?.message || String(e)}`))
+    } finally {
+      running = false
+    }
+  }
+
+  // Keep timers from being kept alive by accident? The HTTP server already keeps the loop alive.
+  setInterval(() => { tick().catch(() => {}) }, tickMs).unref?.()
+  // One immediate check (will still honor runOnStart/interval).
+  tick().catch(() => {})
 }
 
 main().catch((err) => {

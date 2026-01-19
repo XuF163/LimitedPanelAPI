@@ -161,11 +161,15 @@ export async function ensureProxyPool(cfg = {}) {
     ...String(process.env.PROXY_SUB_URLS || "").split(/[,;\s]+/).filter(Boolean)
   ].filter(Boolean)
 
-  if (!subUrls.length) {
-    if (required) throw new Error("proxy enabled but no subscription urls configured (proxy.subscription.urls / PROXY_SUB_URLS)")
-    console.warn("[proxy] enabled but no subscription urls configured; continue without proxy")
-    return { enabled: true, proxyUrls: [], close: async () => {} }
-  }
+  const proxyDb = (() => {
+    try {
+      const dbPath = process.env.PROXY_DB_PATH || cfg?.proxy?.db?.path
+      return openProxyDb({ ...(dbPath ? { dbPath } : {}) })
+    } catch (e) {
+      console.warn(`[proxy] open proxy db failed; continue without db: ${e?.message || String(e)}`)
+      return null
+    }
+  })()
 
   // Reduce workspace file spam by removing legacy generated v2ray config JSON files.
   // NOTE: actual running configs will be placed in OS temp dir unless keepConfigFiles=true.
@@ -176,38 +180,61 @@ export async function ensureProxyPool(cfg = {}) {
   const { exePath, binDir: resolvedBin } = await ensureV2rayCore({ binDir, downloadUrl })
 
   let nodes
-  try {
-    nodes = await loadSubscriptionNodes(subUrls, {
-      timeoutMs: subTimeoutMs,
-      cacheDir: subCacheDir,
-      cacheTtlSec: subCacheTtlSec,
-      useCacheOnFail: subUseCacheOnFail
-    })
-  } catch (e) {
-    const msg = e?.message || String(e)
-    const hint =
-      `subscription fetch failed; ` +
-      `try rerun / increase proxy.subscription.timeoutMs / use percent-encoded URL, ` +
-      `or prewarm cache via: node scripts/subscription-prefetch.js (cacheDir=${subCacheDir}).`
-    throw new Error(`${msg}; ${hint}`, { cause: e })
+  if (!subUrls.length) {
+    nodes = proxyDb?.listNodes?.() || []
+    if (!nodes.length) {
+      try { proxyDb?.close?.() } catch {}
+      if (required) {
+        throw new Error(
+          "proxy enabled but no subscription urls configured (proxy.subscription.urls / PROXY_SUB_URLS) and proxy db is empty"
+        )
+      }
+      console.warn("[proxy] enabled but no subscription urls configured (and proxy db empty); continue without proxy")
+      return { enabled: true, proxyUrls: [], close: async () => {} }
+    }
+    console.warn(`[proxy] no subscription urls; using ${nodes.length} nodes from proxy db`)
+  } else {
+    try {
+      nodes = await loadSubscriptionNodes(subUrls, {
+        timeoutMs: subTimeoutMs,
+        cacheDir: subCacheDir,
+        cacheTtlSec: subCacheTtlSec,
+        useCacheOnFail: subUseCacheOnFail
+      })
+    } catch (e) {
+      nodes = proxyDb?.listNodes?.() || []
+      if (nodes.length) {
+        const msg = e?.message || String(e)
+        console.warn(`[proxy] subscription fetch failed; fallback to proxy db nodes (${nodes.length}): ${msg}`)
+      } else {
+        try { proxyDb?.close?.() } catch {}
+        const msg = e?.message || String(e)
+        const hint =
+          `subscription fetch failed; ` +
+          `try rerun / increase proxy.subscription.timeoutMs / use percent-encoded URL, ` +
+          `or prewarm cache via: node scripts/subscription-prefetch.js (cacheDir=${subCacheDir}).`
+        throw new Error(`${msg}; ${hint}`, { cause: e })
+      }
+    }
   }
   if (!nodes.length) {
+    try { proxyDb?.close?.() } catch {}
     if (required) throw new Error("subscription parsed but no supported nodes found")
     console.warn("[proxy] subscription parsed but no supported nodes found; continue without proxy")
     return { enabled: true, proxyUrls: [], close: async () => {} }
   }
 
   console.log(`[proxy] nodes parsed: ${nodes.length}`)
-
-  const proxyDb = (() => {
-    try {
-      const dbPath = process.env.PROXY_DB_PATH || cfg?.proxy?.db?.path
-      return openProxyDb({ ...(dbPath ? { dbPath } : {}) })
-    } catch (e) {
-      console.warn(`[proxy] open proxy db failed; continue without db: ${e?.message || String(e)}`)
-      return null
+  // Persist parsed nodes for reuse (e.g., WebUI import / fallback if subscription becomes unavailable).
+  if (subUrls.length && proxyDb?.insertNode) {
+    for (const n of nodes) {
+      try {
+        const k = nodeKey(n)
+        if (!k) continue
+        proxyDb.insertNode({ key: k, node: n })
+      } catch {}
     }
-  })()
+  }
 
   const ports = nextPorts(basePort, Math.min(2000, probeCount * probeRounds + 10))
   const procs = []

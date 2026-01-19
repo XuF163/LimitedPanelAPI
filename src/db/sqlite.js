@@ -101,6 +101,7 @@ export function openScanDb({ dbPath } = {}) {
     );
     CREATE INDEX IF NOT EXISTS idx_enka_uid_game_permanent ON enka_uid(game, permanent);
     CREATE INDEX IF NOT EXISTS idx_enka_uid_game_next_retry ON enka_uid(game, next_retry_at);
+    CREATE INDEX IF NOT EXISTS idx_enka_uid_game_last_checked ON enka_uid(game, last_checked_at);
 
     CREATE TABLE IF NOT EXISTS enka_raw (
       game TEXT NOT NULL,
@@ -167,6 +168,18 @@ export function openScanDb({ dbPath } = {}) {
       AND next_retry_at IS NOT NULL
       AND next_retry_at <= ?
     ORDER BY next_retry_at ASC
+    LIMIT ?
+  `)
+
+  const stmtListStale = db.prepare(`
+    SELECT uid FROM enka_uid
+    WHERE game = ?
+      AND permanent = 0
+      AND last_checked_at IS NOT NULL
+      AND last_checked_at <= ?
+      AND (next_retry_at IS NULL OR next_retry_at <= ?)
+      AND uid BETWEEN ? AND ?
+    ORDER BY last_checked_at ASC
     LIMIT ?
   `)
 
@@ -262,6 +275,24 @@ export function openScanDb({ dbPath } = {}) {
     return (rows || []).map((r) => Number(r.uid)).filter((v) => Number.isFinite(v))
   }
 
+  const listStaleUids = (
+    limit = 10,
+    { game = "gs", now = nowMs(), minAgeMs = 0, uidMin = null, uidMax = null } = {}
+  ) => {
+    const lim = Math.max(0, Number(limit) || 0)
+    const age = Math.max(0, Number(minAgeMs) || 0)
+    if (!lim || !age) return []
+
+    const cutoff = now - age
+    const min = Number.isFinite(Number(uidMin)) ? Number(uidMin) : 0
+    const max = Number.isFinite(Number(uidMax)) ? Number(uidMax) : 9_999_999_999
+    const lo = Math.min(min, max)
+    const hi = Math.max(min, max)
+
+    const rows = stmtListStale.all(normalizeGame(game), cutoff, now, lo, hi, lim)
+    return (rows || []).map((r) => Number(r.uid)).filter((v) => Number.isFinite(v))
+  }
+
   // Reserve a slot in a shared (cross-process) rate limiter.
   // Returns how long the caller should wait before performing the action.
   const reserveRateLimit = (name, intervalMs, { now = nowMs() } = {}) => {
@@ -291,5 +322,5 @@ export function openScanDb({ dbPath } = {}) {
 
   const close = () => db.close()
 
-  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, reserveRateLimit, close }
+  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, listStaleUids, reserveRateLimit, close }
 }

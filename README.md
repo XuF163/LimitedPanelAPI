@@ -1,6 +1,6 @@
 # LimitedPanelAPI（ExtremePanelAPI）
 
-生成并托管「极限面板」JSON 的小服务端：支持 **原神（gs）/ 崩铁（sr）/ 绝区零（zzz）**，输出尽量兼容 Yunzai 生态（如 `miao-plugin` / `liangshi-calc` 常用的 `PlayerData` 面板结构）。
+生成并托管「极限面板」JSON 的服务端：支持 **原神（gs）/ 崩铁（sr）/ 绝区零（zzz）**，适用于特定分支的miao-plugin或liangshi
 
 ## 能做什么
 
@@ -20,7 +20,7 @@
 - `data/proxy.sqlite`：代理节点启动/测活记录（可选）
 - `data/samples/<game>/*.jsonl`：每个角色的样本集合（采样输出）
 - `out/<game>/<uid>.json`：生成的极限面板（HTTP 会直接返回这个 JSON）
-- `resources/meta-gs`、`resources/meta-sr`：GS/SR meta（自动从 CNB 拉取）
+- `resources/meta-gs`、`resources/meta-sr`：GS/SR meta（可选：CNB / miao-plugin）
 - `resources/zzz-plugin` 或 `plugins/ZZZ-Plugin`：ZZZ 资源来源（见下文）
 
 ## 环境要求
@@ -40,7 +40,7 @@ npm i
 2) 配置
 - 首次启动会自动生成 `config/config.yaml`
 - 也可直接参考：`config/config.example.yaml`
-- 配置说明：`config/README.md`
+- 配置说明：`docs/config.md`
 
 3) 启动（自动：可选代理池 -> 拉 meta -> 采样 -> 生成 preset -> 启 HTTP）
 ```powershell
@@ -54,21 +54,15 @@ npm start
 - `GET /sr/hyperpanel`
 - `GET /zzz/hyperpanel`
 - `GET /presets/<game>/<uid>.json`
+- `GET /ui`（WebUI：推荐用“简洁配置”保存，配置项更少）
 
 如果某个游戏的 `out/<game>/<uid>.json` 尚未生成，对应 `/<game>/hyperpanel` 会返回 404（先跑一次该游戏的生成即可）。
 
-## 运行指定游戏
+## 启动行为（一次跑 gs/sr/zzz）
 
-`npm start` 只会按 `config/config.yaml` 的 `game:` 生成 **一个**游戏的 preset。要把三个游戏都产出：
+`npm start` 会依次处理并生成：`gs`、`sr`、`zzz` 三个游戏的极限面板（然后启动 HTTP 服务）。
 
-```powershell
-cd temp/LimitedPanelAPI
-$env:GAME='gs'; node src/start.js
-$env:GAME='sr'; node src/start.js
-$env:GAME='zzz'; node src/start.js
-```
-
-（也可直接改 `config/config.yaml` 里的 `game:` 然后运行 `npm start`。）
+如果某个游戏的采样源未就绪（例如：`sr` 缺少 PlayerData；`zzz` 未配置 Enka UID 范围），会打印 `skipped/failed` 提示并继续跑其它游戏。
 
 ## Enka 限速（没代理时：三个游戏加起来 20 秒 1 次）
 
@@ -88,14 +82,9 @@ ZZZ 的面板转换/评分/专武识别依赖 `ZZZ-Plugin` 的资源文件（如
 - `type: yunzai-plugin`：使用本地 `Yunzai/plugins/ZZZ-Plugin`（最稳）
 - `type: github`：自动拉取 `ZZZure/ZZZ-Plugin` 到 `resources/zzz-plugin`
 
-## 常用脚本
-
-- 端到端 QA（代理池 + 扫描 + 生成极限面板 + 对比梁氏预设）：`node scripts/qa-flow.js`
-- 预热订阅缓存（避免订阅偶发 reset 导致空跑）：`node scripts/subscription-prefetch.js`
-
 ## 常见报错
 
-- `Missing meta files ... (run meta:sync first)`：先跑 `npm run meta:sync`，或开启 `meta.autoSync: true`
+- `Missing meta files ...`：打开 `GET /ui` 点击“同步 meta”，或重启（默认 `meta.autoSync: true` 会自动拉取）
 - `Missing PlayerData dir ...`：`samples.mode=playerdata` 时需要正确的 `data/PlayerData/<game>` 路径（可配置 `samples.playerdata.dir`）
 - `proxy enabled but no usable node found`：把 `proxy.required: false` 或 `proxy.enabled: false`，或换订阅/提高 `probeCount`
 - 大量 `429`：降低 `samples.enka.concurrency`、增大 `delayMs/noProxyDelayMs`，或启用代理池
@@ -104,3 +93,8 @@ ZZZ 的面板转换/评分/专武识别依赖 `ZZZ-Plugin` 的资源文件（如
 
 本项目仅用于技术研究与本地测试。请遵守上游服务条款与所在地区法律法规，合理控制请求频率，避免对第三方服务造成压力。
 
+## 致谢 / 参考项目
+
+- `qsyhh/miao-plugin`: https://github.com/qsyhh/miao-plugin
+- `liangshi-calc`: https://github.com/liangshi233/liangshi-calc/commits/master/
+- `yoimiya-kokomi/miao-plugin`: https://github.com/yoimiya-kokomi/miao-plugin

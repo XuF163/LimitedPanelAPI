@@ -1,0 +1,23 @@
+[auto] project=C:\Users\X\Desktop\Bot-Dev\Yunzai\temp\LimitedPanelAPI
+[auto] config=C:\Users\X\Desktop\Bot-Dev\Yunzai\temp\LimitedPanelAPI\config\config.yaml
+[auto] games=gs,sr,zzz
+[auto] out=C:\Users\X\Desktop\Bot-Dev\Yunzai\temp\LimitedPanelAPI\out
+[auto] port=4567 force=false
+listening: http://127.0.0.1:4567 (host=0.0.0.0)
+[auto] sample:collect (playerdata) dir=(auto) maxFiles=all
+[auto] samples written: chars=109 rows=370
+[auto] preset:generate --game gs --uid 100000000
+10000002 神里绫华: sample=313.8 extreme=330.1
+10000003 琴: sample=310.8 extreme=310.8
+10000006 丽莎: sample=330.2 extreme=330.1
+10000007 荧: sample=279.9 extreme=288.7
+10000014 芭芭拉: sample=350.6 extreme=356.8
+10000015 凯亚: sample=318.8 extreme=330.1
+10000016 迪卢克: sample=289.8 extreme=330.1
+10000020 雷泽: sample=330.2 extreme=330.1
+10000021 安柏: sample=330.2 extreme=330.1
+10000022 温迪: sample=320.4 extreme=320.4
+10000023 香菱: sample=328.5 extreme=328.4
+10000024 北斗: sample=323.6 extreme=323.6
+10000025 行秋: sample=330.1 extreme=330.1
+10000026 魈: sample=290.7 extreme=290.7

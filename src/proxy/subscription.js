@@ -420,6 +420,59 @@ function parseNodeFromUriLine(line) {
   return null
 }
 
+export function nodeKey(n) {
+  if (!n) return ""
+  return [
+    n.type || "",
+    n.host || "",
+    n.port || "",
+    n.id || n.password || n.method || ""
+  ].join("|")
+}
+
+function dedupeNodes(nodes) {
+  const list = Array.isArray(nodes) ? nodes : []
+  const seen = new Set()
+  const out = []
+  for (const n of list) {
+    const key = nodeKey(n)
+    if (!key) continue
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(n)
+  }
+  return out
+}
+
+export function parseSubscriptionText(txt = "") {
+  const raw = String(txt || "").trim()
+  if (!raw) return []
+
+  // Clash YAML.
+  if (/^\s*(proxies|proxy-groups)\s*:/m.test(raw)) {
+    return dedupeNodes(parseClashYaml(raw))
+  }
+
+  // Plain / base64 list.
+  let body = raw
+  if (looksLikeBase64(body) && !body.includes("://")) {
+    const decoded = decodeBase64ToUtf8(body)
+    if (decoded) body = decoded
+  }
+
+  const lines = body
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  const all = []
+  for (const line of lines) {
+    const node = parseNodeFromUriLine(line)
+    if (node) all.push(node)
+  }
+  return dedupeNodes(all)
+}
+
 export async function loadSubscriptionNodes(
   urls,
   {
@@ -492,20 +545,7 @@ export async function loadSubscriptionNodes(
     }
   }
 
-  // Deduplicate by (type, host, port, id/password)
-  const seen = new Set()
-  const out = []
-  for (const n of all) {
-    const key = [
-      n.type,
-      n.host,
-      n.port,
-      n.id || n.password || n.method || ""
-    ].join("|")
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(n)
-  }
+  const out = dedupeNodes(all)
 
   if (!out.length && errs.length) {
     throw new AggregateError(

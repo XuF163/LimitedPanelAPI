@@ -27,7 +27,29 @@ function readYamlSafe(filePath) {
 function ensureUserConfig(defaultConfig) {
   if (fs.existsSync(USER_CONFIG_PATH)) return
   fs.mkdirSync(CONFIG_DIR, { recursive: true })
-  fs.writeFileSync(USER_CONFIG_PATH, yaml.dump(defaultConfig, { noRefs: true }), "utf8")
+
+  // Keep user config minimal; defaults live in defSet.yaml.
+  const minimal = {
+    server: {
+      host: defaultConfig?.server?.host ?? "0.0.0.0",
+      port: defaultConfig?.server?.port ?? 4567,
+      enabled: defaultConfig?.server?.enabled ?? true
+    },
+    meta: {
+      source: {
+        type: defaultConfig?.meta?.source?.type ?? "cnb"
+      }
+    },
+    samples: {
+      mode: defaultConfig?.samples?.mode ?? "playerdata"
+    },
+    preset: {
+      uid: String(defaultConfig?.preset?.uid || "100000000"),
+      name: defaultConfig?.preset?.name ?? "极限面板"
+    }
+  }
+
+  fs.writeFileSync(USER_CONFIG_PATH, yaml.dump(minimal, { noRefs: true, lineWidth: 120 }), "utf8")
 }
 
 export function loadAppConfig({ ensureUser = true } = {}) {

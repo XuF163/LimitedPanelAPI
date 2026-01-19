@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LimitedPanelAPI - 配置</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0b1020;
+        --panel: rgba(255, 255, 255, 0.06);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --accent: #7aa2ff;
+        --danger: #ff6b6b;
+        --ok: #4cd964;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f7fb;
+          --panel: rgba(0, 0, 0, 0.04);
+          --border: rgba(0, 0, 0, 0.10);
+          --text: rgba(0, 0, 0, 0.88);
+          --muted: rgba(0, 0, 0, 0.60);
+          --accent: #2f6bff;
+          --danger: #d64545;
+          --ok: #1a9e4a;
+        }
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 22px 18px 36px;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.2px;
+      }
+      .sub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      button.primary {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .pill {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .panel {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      .panel-hd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .panel-hd .left {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .form {
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 10px 12px;
+        align-items: center;
+      }
+      .form label {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .form input:not([type="checkbox"]), .form select {
+        width: 100%;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      .form input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+      }
+      .check {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .ta-small {
+        min-height: 110px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+      }
+      .resultbox {
+        padding: 12px 14px 14px;
+        border-top: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .resultbox.hidden { display: none; }
+      .resultbox.err { color: var(--danger); }
+      .form small {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .form-actions {
+        padding: 0 14px 14px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      details.advanced {
+        margin-top: 12px;
+      }
+      details.advanced > summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 13px;
+        margin: 8px 0;
+      }
+      .panel-hd label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      select {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text);
+        padding: 6px 8px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      textarea {
+        width: 100%;
+        min-height: 560px;
+        border: 0;
+        outline: none;
+        resize: vertical;
+        padding: 14px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        background: transparent;
+        color: var(--text);
+      }
+      .status {
+        margin-top: 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+      .status.ok { color: var(--ok); }
+      .status.err { color: var(--danger); }
+      .hint {
+        margin-top: 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      code { font-family: var(--mono); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div class="title">
+          <h1>LimitedPanelAPI 配置</h1>
+          <div class="sub">推荐用 WebUI 简洁模式配置（保存后部分配置需重启生效，如端口/监听地址）</div>
+        </div>
+        <div class="actions">
+          <span class="pill" id="serverInfo">loading...</span>
+          <button id="btnMetaSync">同步 meta</button>
+          <button id="btnReload">重新加载</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hd">
+          <div class="left">
+            <span class="pill">简洁配置（推荐）</span>
+            <span class="pill">保存会覆盖 <code>config/config.yaml</code>（精简版本）</span>
+          </div>
+        </div>
+        <div class="form">
+          <label for="f_host">监听地址</label>
+          <input id="f_host" placeholder="0.0.0.0" />
+
+          <label for="f_port">监听端口</label>
+          <input id="f_port" placeholder="4567" inputmode="numeric" />
+
+          <label for="f_meta_source">GS/SR meta 来源</label>
+          <select id="f_meta_source">
+            <option value="cnb">CNB（qsyhh_res/meta）</option>
+            <option value="miao-plugin">miao-plugin（拷贝 resources/meta-*）</option>
+          </select>
+
+          <label for="f_miao_dir">miao-plugin 目录（可选）</label>
+          <div>
+            <input id="f_miao_dir" placeholder="留空则自动使用 <YunzaiRoot>/plugins/miao-plugin" />
+            <small id="miaoHint">仅当 meta 来源为 miao-plugin 时生效。</small>
+          </div>
+
+          <label for="f_samples_mode">GS/SR 采样方式</label>
+          <select id="f_samples_mode">
+            <option value="playerdata">本地 PlayerData（gs/sr）</option>
+            <option value="enka">Enka 扫描（gs/sr/zzz）</option>
+          </select>
+
+          <label for="f_playerdata_dir">PlayerData 目录（可选）</label>
+          <div>
+            <input id="f_playerdata_dir" placeholder="留空则自动使用 <YunzaiRoot>/data/PlayerData/<game>" />
+            <small id="playerdataHint">仅当采样方式为 playerdata 时生效。</small>
+          </div>
+
+          <label for="f_uid_start_gs">Enka UID 起始（GS，可选）</label>
+          <input id="f_uid_start_gs" placeholder="100000001" inputmode="numeric" />
+
+          <label for="f_uid_end_gs">Enka UID 结束（GS，可选）</label>
+          <input id="f_uid_end_gs" placeholder="242422996" inputmode="numeric" />
+
+          <label for="f_uid_start_sr">Enka UID 起始（SR，可选）</label>
+          <input id="f_uid_start_sr" placeholder="100000001" inputmode="numeric" />
+
+          <label for="f_uid_end_sr">Enka UID 结束（SR，可选）</label>
+          <input id="f_uid_end_sr" placeholder="242422996" inputmode="numeric" />
+
+          <label for="f_uid_start_zzz">Enka UID 起始（ZZZ，可选，8 位）</label>
+          <input id="f_uid_start_zzz" placeholder="10000000" inputmode="numeric" />
+
+          <label for="f_uid_end_zzz">Enka UID 结束（ZZZ，可选，8 位）</label>
+          <input id="f_uid_end_zzz" placeholder="99999999" inputmode="numeric" />
+
+          <label for="f_max_count">每次最多扫多少 UID</label>
+          <input id="f_max_count" placeholder="20" inputmode="numeric" />
+
+          <label for="f_concurrency">并发</label>
+          <input id="f_concurrency" placeholder="1" inputmode="numeric" />
+
+          <label for="f_proxy_enabled">代理（v2ray）</label>
+          <div>
+            <label class="check"><input id="f_proxy_enabled" type="checkbox" /> 启用代理池</label>
+            <small>启用后 Enka 扫描会使用代理池（订阅/节点可在下方导入）。</small>
+          </div>
+
+          <label for="f_preset_uid">极限面板 UID</label>
+          <input id="f_preset_uid" placeholder="gs/sr 默认 100000000（zzz 默认 10000000）" />
+
+          <label for="f_preset_name">极限面板名称</label>
+          <input id="f_preset_name" placeholder="极限面板" />
+        </div>
+        <div class="form-actions">
+          <button class="primary" id="btnSaveSimple">保存（精简）</button>
+          <button id="btnSaveSimpleMerge">保存（保留高级项）</button>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top: 12px;">
+        <div class="panel-hd">
+          <div class="left">
+            <span class="pill">代理节点 / 订阅导入</span>
+            <span class="pill">仅展示新增节点</span>
+            <span class="pill" id="proxyNodeCount">nodes: -</span>
+          </div>
+          <div class="left">
+            <span class="pill">API: <code>/api/proxy/import</code></span>
+          </div>
+        </div>
+        <div class="form">
+          <label for="f_proxy_sub_urls">订阅链接（可选）</label>
+          <div>
+            <textarea id="f_proxy_sub_urls" class="ta-small" spellcheck="false" placeholder="一行一个 URL，或用空格/逗号分隔"></textarea>
+            <small>保存订阅到 <code>proxy.subscription.urls</code>（写入后重启生效）；同时会尝试解析并导入节点到 SQLite。</small>
+          </div>
+
+          <label for="f_proxy_nodes_text">节点文本（可选）</label>
+          <div>
+            <textarea id="f_proxy_nodes_text" class="ta-small" spellcheck="false" placeholder="粘贴 Clash YAML / base64 / vmess:// vless:// trojan:// ss:// ..."></textarea>
+            <small>直接导入节点到 SQLite（不依赖订阅）。</small>
+          </div>
+
+          <label for="f_proxy_save_urls">写入配置</label>
+          <div>
+            <label class="check"><input id="f_proxy_save_urls" type="checkbox" checked /> 保存订阅链接到配置</label>
+            <small>不会显示重复/已添加的节点；重复节点会被忽略。</small>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="primary" id="btnProxyImport">导入</button>
+          <button id="btnProxyRefreshCount">刷新节点数</button>
+        </div>
+        <div class="resultbox hidden" id="proxyImportResult"></div>
+      </div>
+
+      <details class="advanced" id="advanced">
+        <summary>高级：直接编辑 YAML（不推荐）</summary>
+        <div class="panel">
+        <div class="panel-hd">
+          <div class="left">
+            <label>查看：</label>
+            <select id="kind">
+              <option value="user" selected>用户配置（config.yaml）</option>
+              <option value="default">默认配置（defSet.yaml，只读）</option>
+            </select>
+            <span class="pill" id="filePath"></span>
+          </div>
+          <div class="left">
+            <span class="pill">API: <code>/api/config</code></span>
+          </div>
+        </div>
+        <textarea id="yaml" spellcheck="false"></textarea>
+        </div>
+        <div class="form-actions" style="padding-top: 12px;">
+          <button class="primary" id="btnSave">保存 YAML</button>
+        </div>
+      </details>
+
+      <div class="status" id="status"></div>
+      <div class="hint">
+        提示：如果你把服务监听到 <code>0.0.0.0</code>，建议保持 WebUI 仅本机可访问（默认）。如需远程访问，请在配置里设置 <code>server.ui.allowRemote</code> 并配合 <code>server.ui.token</code>。
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const uiToken = new URLSearchParams(location.search).get("token") || "";
+
+      function setStatus(text, kind) {
+        const el = $("status");
+        el.textContent = text || "";
+        el.className = "status" + (kind ? " " + kind : "");
+      }
+
+      async function apiFetch(url, options = {}) {
+        const headers = { ...(options.headers || {}) };
+        if (uiToken) headers["x-ui-token"] = uiToken;
+        return await fetch(url, { ...options, headers });
+      }
+
+      function normalizeMetaType(v) {
+        const s = String(v || "").trim().toLowerCase();
+        if (["miao-plugin", "miaoplugin", "miao"].includes(s)) return "miao-plugin";
+        return "cnb";
+      }
+
+      function normalizeSamplesMode(v) {
+        const s = String(v || "").trim().toLowerCase();
+        return ["enka", "playerdata"].includes(s) ? s : "playerdata";
+      }
+
+      async function loadConfig() {
+        const kind = $("kind").value;
+        $("btnSave").disabled = kind !== "user";
+        setStatus("loading...", "");
+        const res = await apiFetch(`/api/config?kind=${encodeURIComponent(kind)}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`${json.error || "request_failed"} (${res.status})`);
+        }
+        $("filePath").textContent = json.file || "";
+        $("yaml").value = json.yaml || "";
+        setStatus("ok", "ok");
+      }
+
+      function updateSimpleVisibility() {
+        const metaType = normalizeMetaType($("f_meta_source").value);
+        const samplesMode = normalizeSamplesMode($("f_samples_mode").value);
+        const showMiao = metaType === "miao-plugin";
+        $("f_miao_dir").disabled = !showMiao;
+        $("miaoHint").style.opacity = showMiao ? "1" : "0.6";
+
+        const showPlayerData = samplesMode === "playerdata";
+        $("f_playerdata_dir").disabled = !showPlayerData;
+        $("playerdataHint").style.opacity = showPlayerData ? "1" : "0.6";
+
+        // UID ranges: always editable (GS/SR only take effect when samples.mode=enka; ZZZ always uses Enka).
+        for (const id of ["f_uid_start_gs", "f_uid_end_gs", "f_uid_start_sr", "f_uid_end_sr", "f_uid_start_zzz", "f_uid_end_zzz"]) {
+          $(id).disabled = false;
+        }
+      }
+
+      async function loadSimple() {
+        const res = await apiFetch(`/api/config-json?kind=merged`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "request_failed"} (${res.status})`);
+
+        const cfg = json.json || {};
+        $("f_host").value = (cfg.server && cfg.server.host) ? String(cfg.server.host) : "0.0.0.0";
+        $("f_port").value = (cfg.server && cfg.server.port) ? String(cfg.server.port) : "4567";
+
+        $("f_meta_source").value = normalizeMetaType(cfg?.meta?.source?.type);
+        $("f_miao_dir").value = String(cfg?.meta?.source?.miaoPlugin?.dir || "");
+
+        $("f_samples_mode").value = normalizeSamplesMode(cfg?.samples?.mode);
+        $("f_playerdata_dir").value = String(cfg?.samples?.playerdata?.dir || "");
+
+        const enka = cfg?.samples?.enka || {};
+        const legacyUidStart = enka?.uidStart;
+        const legacyUidEnd = enka?.uidEnd;
+        const enkaGs = enka?.gs || {};
+        const enkaSr = enka?.sr || {};
+        const enkaZzz = enka?.zzz || {};
+
+        const gsUidStart = enkaGs?.uidStart != null ? enkaGs.uidStart : legacyUidStart;
+        const gsUidEnd = enkaGs?.uidEnd != null ? enkaGs.uidEnd : legacyUidEnd;
+        const srUidStart = enkaSr?.uidStart != null ? enkaSr.uidStart : legacyUidStart;
+        const srUidEnd = enkaSr?.uidEnd != null ? enkaSr.uidEnd : legacyUidEnd;
+
+        $("f_uid_start_gs").value = gsUidStart == null ? "" : String(gsUidStart);
+        $("f_uid_end_gs").value = gsUidEnd == null ? "" : String(gsUidEnd);
+        $("f_uid_start_sr").value = srUidStart == null ? "" : String(srUidStart);
+        $("f_uid_end_sr").value = srUidEnd == null ? "" : String(srUidEnd);
+        $("f_uid_start_zzz").value = enkaZzz?.uidStart == null ? "" : String(enkaZzz.uidStart);
+        $("f_uid_end_zzz").value = enkaZzz?.uidEnd == null ? "" : String(enkaZzz.uidEnd);
+        $("f_max_count").value = cfg?.samples?.enka?.maxCount == null ? "20" : String(cfg.samples.enka.maxCount);
+        $("f_concurrency").value = cfg?.samples?.enka?.concurrency == null ? "1" : String(cfg.samples.enka.concurrency);
+
+        $("f_proxy_enabled").checked = Boolean(cfg?.proxy?.enabled ?? false);
+
+        $("f_preset_uid").value = cfg?.preset?.uid == null ? "" : String(cfg.preset.uid);
+        $("f_preset_name").value = cfg?.preset?.name == null ? "极限面板" : String(cfg.preset.name);
+
+        updateSimpleVisibility();
+      }
+
+      async function saveSimple(mode) {
+        setStatus("saving (simple)...", "");
+
+        const metaType = normalizeMetaType($("f_meta_source").value);
+        const samplesMode = normalizeSamplesMode($("f_samples_mode").value);
+
+        const payload = {
+          server: {
+            host: $("f_host").value,
+            port: $("f_port").value,
+            enabled: true
+          },
+          meta: {
+            source: {
+              type: metaType,
+              miaoPlugin: { dir: $("f_miao_dir").value }
+            }
+          },
+          samples: {
+            mode: samplesMode,
+            playerdata: { dir: $("f_playerdata_dir").value },
+            enka: {
+              gs: {
+                uidStart: $("f_uid_start_gs").value || null,
+                uidEnd: $("f_uid_end_gs").value || null,
+              },
+              sr: {
+                uidStart: $("f_uid_start_sr").value || null,
+                uidEnd: $("f_uid_end_sr").value || null,
+              },
+              zzz: {
+                uidStart: $("f_uid_start_zzz").value || null,
+                uidEnd: $("f_uid_end_zzz").value || null,
+              },
+              maxCount: $("f_max_count").value || 20,
+              concurrency: $("f_concurrency").value || 1
+            }
+          },
+          preset: {
+            uid: $("f_preset_uid").value,
+            name: $("f_preset_name").value
+          },
+          proxy: {
+            enabled: Boolean($("f_proxy_enabled")?.checked)
+          }
+        };
+
+        const res = await apiFetch(`/api/config-simple?mode=${encodeURIComponent(mode || "replace")}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          throw new Error(`${json.error || "save_failed"} (${res.status})${msg}`);
+        }
+        const backupLine = json.backup ? `\nbackup: ${json.backup}` : "";
+        setStatus(`saved: ${json.file}${backupLine}\nmode: ${json.mode}`, "ok");
+
+        // refresh views
+        await loadConfig().catch(() => {});
+        await loadSimple().catch(() => {});
+      }
+
+      async function saveConfig() {
+        const kind = $("kind").value;
+        if (kind !== "user") return;
+        setStatus("saving...", "");
+        const body = { yaml: $("yaml").value };
+        const res = await apiFetch(`/api/config?kind=user`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          throw new Error(`${json.error || "save_failed"} (${res.status})${msg}`);
+        }
+        const backupLine = json.backup ? `\nbackup: ${json.backup}` : "";
+        setStatus(`saved: ${json.file}${backupLine}`, "ok");
+      }
+
+      async function syncMeta() {
+        setStatus("meta syncing...", "");
+        const res = await apiFetch(`/api/meta/sync?game=all`, { method: "POST" });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`${json.error || "meta_sync_failed"} (${res.status})`);
+        }
+        setStatus("meta synced: gs,sr", "ok");
+      }
+
+      function setProxyResult(text, kind) {
+        const el = $("proxyImportResult");
+        if (!el) return;
+        el.textContent = text || "";
+        el.className = "resultbox" + (text ? "" : " hidden") + (kind ? " " + kind : "");
+      }
+
+      function splitToList(text) {
+        return String(text || "")
+          .split(/[\r\n,;\s]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      async function refreshProxyNodeCount() {
+        const el = $("proxyNodeCount");
+        if (!el) return;
+        const res = await apiFetch("/api/proxy/nodes/summary");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "proxy_nodes_failed"} (${res.status})`);
+        el.textContent = `nodes: ${json.count ?? "-"}`;
+      }
+
+      async function proxyImport() {
+        setProxyResult("importing...", "");
+        const urls = splitToList($("f_proxy_sub_urls")?.value);
+        const rawText = String($("f_proxy_nodes_text")?.value || "");
+        const saveUrlsToConfig = Boolean($("f_proxy_save_urls")?.checked);
+
+        const res = await apiFetch("/api/proxy/import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ subscriptionUrls: urls, rawText, saveUrlsToConfig }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          setProxyResult(`${json.error || "proxy_import_failed"} (${res.status})${msg}`, "err");
+          return;
+        }
+
+        const lines = [];
+        lines.push(`parsed=${json.parsed} inserted=${json.inserted} skippedExisting=${json.skippedExisting}`);
+        lines.push(`nodeTotal=${json.nodeTotal ?? "-"}`);
+        if (json.configUpdated) {
+          lines.push(`configUpdated=true urlsAdded=${json.urlsAdded} urlsTotal=${json.urlsTotal}`);
+        } else {
+          lines.push(`configUpdated=false`);
+        }
+        if (json.subscriptionError) {
+          lines.push(`subscriptionError: ${json.subscriptionError}`);
+        }
+        if (Array.isArray(json.insertedPreview) && json.insertedPreview.length) {
+          lines.push("");
+          lines.push("new nodes:");
+          for (const n of json.insertedPreview) {
+            const tag = n.tag ? ` ${n.tag}` : "";
+            lines.push(`- ${n.type || "?"} ${n.host || "?"}:${n.port || 0}${tag}`);
+          }
+        } else {
+          lines.push("new nodes: 0");
+        }
+        setProxyResult(lines.join("\n"), "");
+        await refreshProxyNodeCount();
+      }
+
+      async function init() {
+        $("serverInfo").textContent = `${location.protocol}//${location.host}`;
+        $("kind").addEventListener("change", () => loadConfig().catch((e) => setStatus(String(e), "err")));
+        $("btnReload").addEventListener("click", () => Promise.all([
+          loadSimple(),
+          loadConfig()
+        ]).catch((e) => setStatus(String(e), "err")));
+        $("btnSave").addEventListener("click", () => saveConfig().catch((e) => setStatus(String(e), "err")));
+        $("btnMetaSync").addEventListener("click", () => syncMeta().catch((e) => setStatus(String(e), "err")));
+        $("btnSaveSimple").addEventListener("click", () => saveSimple("replace").catch((e) => setStatus(String(e), "err")));
+        $("btnSaveSimpleMerge").addEventListener("click", () => saveSimple("merge").catch((e) => setStatus(String(e), "err")));
+        $("btnProxyImport")?.addEventListener("click", () => proxyImport().catch((e) => setProxyResult(String(e), "err")));
+        $("btnProxyRefreshCount")?.addEventListener("click", () => refreshProxyNodeCount().catch((e) => setProxyResult(String(e), "err")));
+
+        $("f_meta_source").addEventListener("change", updateSimpleVisibility);
+        $("f_samples_mode").addEventListener("change", updateSimpleVisibility);
+
+        await loadSimple();
+        await loadConfig();
+        await refreshProxyNodeCount().catch(() => {});
+      }
+
+      init().catch((e) => setStatus(String(e), "err"));
+    </script>
+  </body>
+</html>
