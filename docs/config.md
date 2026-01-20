@@ -135,6 +135,7 @@ meta:
 - 未配置某个游戏的 UID 列表/范围时：启动只会输出 `skipped game=<game>`，不会去请求 Enka
 - WebUI 即使在 `samples.mode: playerdata` 也允许填写并保存这些范围（用于预配置）；但 `gs/sr` 只有切到 `enka` 才会生效
 - `maxCount`：每次启动最多扫多少 UID（避免一次扫太大）
+- `fetcher`：Enka 请求实现：`js | rust | auto`
 - `concurrency`：并发 worker 数
 - `delayMs`：有代理时按“代理数量分桶节流”的每桶间隔（毫秒）
 - `noProxyDelayMs`：无代理/无可用节点时的 **全局限速**（跨 gs/sr/zzz、跨进程共享；毫秒）
@@ -144,11 +145,27 @@ meta:
 - `saveRawFile`：是否额外写 `data/raw/<game>/<uid>.json`（大规模扫描不推荐）
 - `circuitBreaker.*`：简易熔断策略
 
+Rust fetcher（可选）：
+- 可用 `ENKA_FETCHER=js|rust|auto` 覆盖配置（默认跟随 `samples.enka.fetcher`）
+- 可用 `LIMITEDPANEL_RS_BIN` 指定 Rust 二进制路径；未指定时会尝试 `cargo build --release`（Windows 需要 VS Build Tools/MSVC；`RUST_NO_BUILD=1` 可禁用自动构建）
+- 默认 `auto`：仅在启用代理（`PROXY_URLS` 非空）时优先使用 rust，否则回退到 js（保留 sqlite 全局限速）
+- 强制 `rust`：无代理也会使用 rust（进程内限速，不走 sqlite 全局限速；建议调大 `samples.enka.noProxyDelayMs`，避免 429）
+
 定期重扫（刷新样本）：
 
 - `samples.enka.rescan.enabled`
 - `samples.enka.rescan.afterSec`：认为“过期”的最小间隔（秒）
 - `samples.enka.rescan.first`：每次启动优先重扫多少个 UID（按 `last_checked_at` 最旧优先）
+
+每日扫描终止线（减少重复扫描）：
+
+- `samples.enka.dailyGate.enabled`：是否启用“当日终止线”
+- `samples.enka.dailyGate.threshold.<game>`：合格阈值（`<game>` 为 `gs/sr/zzz`）
+
+说明：
+
+- 在每次 `preset:generate` 后，会基于 `out/<game>/<preset.uid>.json` 的角色 `_mark.mark` 计算 gate，并写入 `data/scan.sqlite` 的 `scan_daily_gate` 表。
+- 当某个游戏在当天满足“meta 全角色均达标”后，同一天内的自动 Enka 扫描会直接跳过该游戏（直到次日）。
 
 ## 极限面板（preset）
 
@@ -194,6 +211,7 @@ ZZZ 的面板转换/评分/专武识别依赖 `ZZZ-Plugin` 资源（如 `model/E
 - `proxy.db.path`：代理节点启动/测活记录 SQLite（默认 `data/proxy.sqlite`）
 - `proxy.v2ray.keepConfigFiles`：是否保留 v2ray 配置文件到项目目录
 - `proxy.subscription.urls`
+- `proxy.subscription.parser`：订阅解析实现（`js|rust|auto`，也可用环境变量 `PROXY_SUB_PARSER` 覆盖）
 - `proxy.subscription.maxNodes`
 - `proxy.subscription.probeCount`
 - `proxy.subscription.testUrl`：建议使用返回 JSON 的 API 地址（403/404 也算“可连通”）

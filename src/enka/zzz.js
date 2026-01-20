@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url"
 import { enka } from "../config.js"
 import { loadAppConfig } from "../user-config.js"
 import { ensureZzzSource } from "../zzz/source.js"
+import { resolveEnkaUserAgent } from "./headers.js"
 
 export class EnkaHttpError extends Error {
   constructor(uid, status, body) {
@@ -70,7 +71,7 @@ async function fetchOne(url, { userAgent, timeoutMs, dispatcher } = {}) {
 }
 
 export async function fetchEnkaZzz(uid, options = {}) {
-  const userAgent = options.userAgent || enka.userAgent
+  const userAgent = options.userAgent || (await resolveEnkaUserAgent("zzz")) || enka.userAgent
   const timeoutMs = options.timeoutMs ?? enka.timeoutMs
   const dispatcher = options.dispatcher
 

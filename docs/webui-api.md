@@ -121,6 +121,7 @@ Body：JSON（建议按 WebUI 当前实现发送，字段均可选；后端会�
       "sr": { "uids": [], "uidStart": 100000001, "uidEnd": 242422996 },
       "zzz": { "uids": [], "uidStart": 10000000, "uidEnd": 99999999 },
       "maxCount": 20,
+      "fetcher": "auto",
       "concurrency": 1
     }
   },
@@ -180,6 +181,26 @@ Query：
 ```
 
 `marker` 可能为 `null`（文件不存在或解析失败）。
+
+## 采样终止线（每日）
+
+### GET `/api/samples/gate?game=gs|sr|zzz|all`
+
+用途：查看当日扫描终止线状态（读取 `data/scan.sqlite` 的 `scan_daily_gate` 表），便于 WebUI 展示“缺哪些角色/差多少分”。
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "day": "2026-01-20",
+  "gates": {
+    "gs": { "done": false, "totalChars": 100, "qualifiedChars": 40, "detail": {} },
+    "sr": null,
+    "zzz": null
+  }
+}
+```
 
 ## 代理节点 / 订阅导入（WebUI 面板）
 
@@ -252,4 +273,3 @@ Body（`Content-Type: application/json`）：
 - `GET /presets/<game>/<uid>.json`
 
 > `/<game>/hyperpanel` 会优先返回默认 UID 的 `out/<game>/<uid>.json`；文件不存在时返回 404（`error=not_found`）。
-

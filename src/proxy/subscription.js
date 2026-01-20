@@ -4,6 +4,8 @@ import path from "node:path"
 import crypto from "node:crypto"
 import { createRequire } from "node:module"
 import { spawn } from "node:child_process"
+import { createInterface } from "node:readline"
+import { ensureLimitedPanelRsBinary } from "../rust/runner.js"
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
@@ -41,13 +43,20 @@ function toBool(v) {
   return ["1", "true", "yes", "y", "on"].includes(s)
 }
 
-async function curlFetch(url, { timeoutMs = 15_000 } = {}) {
+function normalizeSubParserMode(m, fallback = "auto") {
+  const s = String(m || "").trim().toLowerCase()
+  if (["js", "rust", "auto"].includes(s)) return s
+  return fallback
+}
+
+async function curlFetch(url, { timeoutMs = 15_000, insecureSkipVerify = false } = {}) {
   return await new Promise((resolve, reject) => {
     const seconds = Math.max(1, Math.ceil(timeoutMs / 1000))
     // Allow some extra wall time for curl's internal retries.
     const maxTimeSec = Math.max(seconds, seconds * 3 + 5)
     const args = [
       "-fsSL",
+      ...(insecureSkipVerify ? ["-k"] : []),
       "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "--http1.1",
       "--retry", "5",
@@ -91,8 +100,12 @@ function normalizeHttpUrl(raw) {
   }
 }
 
-async function fetchText(url, { timeoutMs = 15_000 } = {}) {
+async function fetchText(url, { timeoutMs = 15_000, insecureSkipVerify = false } = {}) {
   const normalizedUrl = normalizeHttpUrl(url)
+  // If user explicitly requests insecure TLS, skip undici fetch (still validates TLS) and go straight to curl -k.
+  if (insecureSkipVerify) {
+    return await curlFetch(normalizedUrl, { timeoutMs, insecureSkipVerify: true })
+  }
   const maxAttempts = 6
   let lastErr = null
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -135,7 +148,7 @@ async function fetchText(url, { timeoutMs = 15_000 } = {}) {
   // Fallback: curl sometimes works better with certain subscription sites.
   let curlErr = null
   try {
-    return await curlFetch(normalizedUrl, { timeoutMs })
+    return await curlFetch(normalizedUrl, { timeoutMs, insecureSkipVerify })
   } catch (e) {
     curlErr = e
   }
@@ -456,6 +469,38 @@ function parseNodeFromUriLine(line) {
   return null
 }
 
+async function parseSubscriptionTextRust(txt = "", { rustBin } = {}) {
+  const bin = rustBin || (await ensureLimitedPanelRsBinary())
+  const child = spawn(bin, ["sub-parse", "--stdin"], {
+    stdio: ["pipe", "pipe", "inherit"],
+    windowsHide: true
+  })
+
+  child.stdin.end(String(txt || ""), "utf8")
+
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
+  const exitCodePromise = new Promise((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", (code) => resolve(code))
+  })
+
+  const nodes = []
+  for await (const line of rl) {
+    const s = String(line || "").trim()
+    if (!s) continue
+    try {
+      const obj = JSON.parse(s)
+      if (obj && typeof obj === "object") nodes.push(obj)
+    } catch {
+      // ignore invalid jsonl line
+    }
+  }
+
+  const code = await exitCodePromise
+  if (code !== 0) throw new Error(`rust sub-parse failed (code=${code})`)
+  return Array.isArray(nodes) ? nodes : []
+}
+
 export function nodeKey(n) {
   if (!n) return ""
   return [
@@ -509,23 +554,57 @@ export function parseSubscriptionText(txt = "") {
   return dedupeNodes(all)
 }
 
+export async function parseSubscriptionTextAsync(txt = "", { parser = "auto" } = {}) {
+  const mode = normalizeSubParserMode(process.env.PROXY_SUB_PARSER || parser || "auto")
+  if (mode === "js") return parseSubscriptionText(txt)
+
+  try {
+    const rustBin = await ensureLimitedPanelRsBinary()
+    const nodes = await parseSubscriptionTextRust(txt, { rustBin })
+    return dedupeNodes(nodes)
+  } catch (e) {
+    const msg = e?.message || String(e)
+    if (mode === "rust") throw e
+    console.warn(`[proxy] rust sub parser unavailable; fallback to js: ${msg}`)
+    return parseSubscriptionText(txt)
+  }
+}
+
 export async function loadSubscriptionNodes(
   urls,
   {
     timeoutMs = 15_000,
     cacheDir,
     cacheTtlSec = 0,
-    useCacheOnFail = true
+    useCacheOnFail = true,
+    insecureSkipVerify = false,
+    parser = "auto"
   } = {}
 ) {
   const list = toList(urls)
   const all = []
   const errs = []
+
+  const parserMode = normalizeSubParserMode(process.env.PROXY_SUB_PARSER || parser || "auto")
+  let rustBin = null
+  if (parserMode === "rust" || parserMode === "auto") {
+    try {
+      rustBin = await ensureLimitedPanelRsBinary()
+    } catch (e) {
+      if (parserMode === "rust") throw e
+      const msg = e?.message || String(e)
+      console.warn(`[proxy] rust sub parser unavailable; fallback to js: ${msg}`)
+      rustBin = null
+    }
+  }
   const resolvedCacheDir =
     normalizeCacheDir(process.env.PROXY_SUB_CACHE_DIR || cacheDir || "")
   const resolvedCacheTtlSec = Number(process.env.PROXY_SUB_CACHE_TTL_SEC || cacheTtlSec) || 0
   const resolvedUseCacheOnFail = toBool(
     process.env.PROXY_SUB_USE_CACHE_ON_FAIL ?? (useCacheOnFail ? "1" : "0")
+  )
+  const resolvedInsecureSkipVerify = toBool(
+    process.env.PROXY_SUB_INSECURE_SKIP_VERIFY ?? (insecureSkipVerify ? "1" : "0")
   )
 
   for (const url of list) {
@@ -533,7 +612,7 @@ export async function loadSubscriptionNodes(
     const cachePath = path.join(resolvedCacheDir, `${sha1Hex(normalizeHttpUrl(url))}.txt`)
 
     try {
-      txt = await fetchText(url, { timeoutMs })
+      txt = await fetchText(url, { timeoutMs, insecureSkipVerify: resolvedInsecureSkipVerify })
       // Save cache on success.
       if (txt && txt.trim()) await writeCacheFile(cachePath, txt)
     } catch (e) {
@@ -557,27 +636,16 @@ export async function loadSubscriptionNodes(
       }
     }
 
-    // Clash YAML.
-    if (/^\s*(proxies|proxy-groups)\s*:/m.test(txt)) {
-      all.push(...parseClashYaml(txt))
-      continue
-    }
-
-    // Plain / base64 list.
-    let body = String(txt || "").trim()
-    if (looksLikeBase64(body) && !body.includes("://")) {
-      const decoded = decodeBase64ToUtf8(body)
-      if (decoded) body = decoded
-    }
-
-    const lines = body
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-
-    for (const line of lines) {
-      const node = parseNodeFromUriLine(line)
-      if (node) all.push(node)
+    if (rustBin) {
+      try {
+        all.push(...(await parseSubscriptionTextRust(txt, { rustBin })))
+      } catch (e) {
+        const msg = e?.message || String(e)
+        console.warn(`[proxy] rust sub-parse failed; fallback to js: ${msg}`)
+        all.push(...parseSubscriptionText(txt))
+      }
+    } else {
+      all.push(...parseSubscriptionText(txt))
     }
   }
 

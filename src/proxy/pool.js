@@ -3,6 +3,7 @@ import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { createInterface } from "node:readline"
 import { ProxyAgent } from "undici"
 
 import { ensureDir } from "../utils/fs.js"
@@ -12,6 +13,7 @@ import { buildV2rayHttpProxyConfig } from "./v2ray.js"
 import { ensureMihomoCore } from "./mihomo-core.js"
 import { startMihomoHttpProxy } from "./mihomo.js"
 import { loadSubscriptionNodes } from "./subscription.js"
+import { ensureLimitedPanelRsBinary } from "../rust/runner.js"
 
 function toBool(v, fallback = false) {
   if (v == null || v === "") return fallback
@@ -26,7 +28,14 @@ function toInt(v, fallback) {
   return Number.isFinite(n) ? Math.trunc(n) : fallback
 }
 
-async function testProxy(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
+function normalizeProberMode(v) {
+  const s = String(v || "").trim().toLowerCase()
+  if ([ "rust", "rs" ].includes(s)) return "rust"
+  if (s === "auto") return "auto"
+  return "js"
+}
+
+async function testProxyJs(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
   const controller = new AbortController()
   const tid = setTimeout(() => controller.abort(), timeoutMs)
   const dispatcher = new ProxyAgent(proxyUrl)
@@ -51,6 +60,86 @@ async function testProxy(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {})
     clearTimeout(tid)
     dispatcher.close?.()
   }
+}
+
+let cachedRustBinPromise = null
+async function getRustBin() {
+  if (!cachedRustBinPromise) cachedRustBinPromise = ensureLimitedPanelRsBinary()
+  return await cachedRustBinPromise
+}
+
+async function testProxyRust(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
+  const rustBin = await getRustBin()
+  const ua = headers?.["user-agent"] || headers?.["User-Agent"] || ""
+  const accept = headers?.accept || headers?.Accept || "application/json"
+
+  const args = [
+    "probe-pool",
+    "--proxy-urls", String(proxyUrl || ""),
+    "--test-url", String(testUrl || ""),
+    "--timeout-ms", String(timeoutMs),
+    "--concurrency", "1",
+    "--max-body-bytes", "65536",
+    "--accept", String(accept || "application/json")
+  ]
+  if (ua) args.push("--user-agent", String(ua))
+
+  const child = spawn(rustBin, args, { stdio: [ "ignore", "pipe", "pipe" ] })
+
+  const killTimer = setTimeout(() => {
+    try { child.kill() } catch {}
+  }, Math.max(1_000, timeoutMs + 1_000))
+
+  let stderr = ""
+  child.stderr?.on("data", (d) => { stderr += String(d || "") })
+
+  let parsed = null
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
+  try {
+    for await (const line of rl) {
+      const s = String(line || "").trim()
+      if (!s) continue
+      try {
+        parsed = JSON.parse(s)
+      } catch {}
+      break
+    }
+  } finally {
+    rl.close()
+  }
+
+  const code = await new Promise((resolve) => child.once("close", resolve))
+  clearTimeout(killTimer)
+
+  if (parsed && typeof parsed === "object") {
+    return {
+      ok: Boolean(parsed.ok),
+      status: parsed.status == null ? null : Number(parsed.status),
+      ms: Number.isFinite(Number(parsed.ms)) ? Number(parsed.ms) : null,
+      error: parsed.error ? String(parsed.error) : null
+    }
+  }
+
+  return {
+    ok: false,
+    status: null,
+    ms: null,
+    error: `rust probe failed (code=${code}): ${String(stderr || "").trim().slice(0, 200)}`
+  }
+}
+
+async function testProxy(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
+  const mode = normalizeProberMode(process.env.PROXY_PROBER || "js")
+  if (mode !== "js") {
+    try {
+      return await testProxyRust(proxyUrl, { testUrl, timeoutMs, headers })
+    } catch (e) {
+      const msg = e?.message || String(e)
+      if (mode === "rust") throw e
+      console.warn(`[proxy] rust prober unavailable; fallback to js: ${msg}`)
+    }
+  }
+  return await testProxyJs(proxyUrl, { testUrl, timeoutMs, headers })
 }
 
 function nextPorts(basePort, count) {
@@ -124,9 +213,12 @@ function pickCandidates(nodes, probeCount, { strategy = "spread", offset = 0 } =
   return out
 }
 
-export async function ensureProxyPool(cfg = {}) {
+export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
   const enabled = toBool(process.env.PROXY_ENABLED, cfg?.proxy?.enabled ?? false)
-  if (!enabled) return { enabled: false, proxyUrls: [], close: async () => {} }
+  if (!enabled) {
+    try { onUpdate?.([]) } catch {}
+    return { enabled: false, proxyUrls: [], close: async () => {} }
+  }
 
   const required = toBool(process.env.PROXY_REQUIRED, cfg?.proxy?.required ?? false)
   const corePref = String(process.env.PROXY_CORE || cfg?.proxy?.core || "v2ray").trim().toLowerCase()
@@ -230,7 +322,9 @@ export async function ensureProxyPool(cfg = {}) {
         timeoutMs: subTimeoutMs,
         cacheDir: subCacheDir,
         cacheTtlSec: subCacheTtlSec,
-        useCacheOnFail: subUseCacheOnFail
+        useCacheOnFail: subUseCacheOnFail,
+        insecureSkipVerify: Boolean(cfg?.proxy?.subscription?.insecureSkipVerify ?? false),
+        parser: cfg?.proxy?.subscription?.parser
       })
     } catch (e) {
       nodes = proxyDb?.listNodes?.() || []
@@ -332,6 +426,13 @@ export async function ensureProxyPool(cfg = {}) {
   const proxyUrls = []
   const tempFiles = new Set()
   const tempDirs = new Set()
+  const notify = (force = false) => {
+    if (typeof onUpdate !== "function") return
+    try {
+      // Always pass a snapshot; callers may mutate their own copy.
+      onUpdate(proxyUrls.slice(), { force })
+    } catch {}
+  }
 
   const startOne = async (node, port) => {
     const core = coreForNode(node)
@@ -510,6 +611,7 @@ export async function ensureProxyPool(cfg = {}) {
   }, progressEveryMs)
   progressTimer.unref?.()
   logProgress(true)
+  notify(true)
 
   const worker = async () => {
     while (!stop) {
@@ -555,6 +657,7 @@ export async function ensureProxyPool(cfg = {}) {
         proxyUrls.push(res.proxyUrl)
         console.log(`[proxy] ok ${res.proxyUrl} ${res.node.type} ${res.node.tag} (${res.test.ms}ms status=${res.test.status})`)
         logProgress(true)
+        notify(false)
         if (proxyUrls.length >= poolSize) {
           stop = true
           return
@@ -572,6 +675,7 @@ export async function ensureProxyPool(cfg = {}) {
   await Promise.all(Array.from({ length: startConcurrency }, () => worker()))
   clearInterval(progressTimer)
   logProgress(true)
+  notify(true)
 
   if (required && proxyUrls.length === 0) {
     // Ensure cleanup before throw.

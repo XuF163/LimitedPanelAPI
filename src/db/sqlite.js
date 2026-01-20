@@ -124,6 +124,18 @@ export function openScanDb({ dbPath } = {}) {
       next_at INTEGER,
       updated_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS scan_daily_gate (
+      game TEXT NOT NULL,
+      day TEXT NOT NULL,
+      done INTEGER DEFAULT 0,
+      done_at INTEGER,
+      total_chars INTEGER,
+      qualified_chars INTEGER,
+      detail_json TEXT,
+      PRIMARY KEY (game, day)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scan_daily_gate_game_day ON scan_daily_gate(game, day);
   `)
 
   const stmtGet = db.prepare(`SELECT * FROM enka_uid WHERE game = ? AND uid = ?`)
@@ -160,6 +172,22 @@ export function openScanDb({ dbPath } = {}) {
     ON CONFLICT(name) DO UPDATE SET
       next_at=excluded.next_at,
       updated_at=excluded.updated_at
+  `)
+
+  const stmtGetDailyGate = db.prepare(`
+    SELECT game, day, done, done_at, total_chars, qualified_chars, detail_json
+    FROM scan_daily_gate
+    WHERE game = ? AND day = ?
+  `)
+  const stmtUpsertDailyGate = db.prepare(`
+    INSERT INTO scan_daily_gate (game, day, done, done_at, total_chars, qualified_chars, detail_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(game, day) DO UPDATE SET
+      done=excluded.done,
+      done_at=excluded.done_at,
+      total_chars=excluded.total_chars,
+      qualified_chars=excluded.qualified_chars,
+      detail_json=excluded.detail_json
   `)
   const stmtListDueRetry = db.prepare(`
     SELECT uid FROM enka_uid
@@ -320,7 +348,29 @@ export function openScanDb({ dbPath } = {}) {
     return { waitMs, nextAt }
   }
 
+  const getDailyGate = (game, day) => {
+    const g = normalizeGame(game)
+    const d = String(day || "").trim()
+    if (!g || !d) return null
+    return stmtGetDailyGate.get(g, d) || null
+  }
+
+  const setDailyGate = (game, day, { done, doneAt, totalChars, qualifiedChars, detailJson } = {}) => {
+    const g = normalizeGame(game)
+    const d = String(day || "").trim()
+    if (!g || !d) return
+    stmtUpsertDailyGate.run(
+      g,
+      d,
+      done ? 1 : 0,
+      doneAt != null ? Number(doneAt) : null,
+      totalChars != null ? Number(totalChars) : null,
+      qualifiedChars != null ? Number(qualifiedChars) : null,
+      detailJson != null ? String(detailJson) : null
+    )
+  }
+
   const close = () => db.close()
 
-  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, listStaleUids, reserveRateLimit, close }
+  return { dbPath: resolved, getUidState, shouldSkipUid, markPermanent, recordSuccess, recordFailure, getCursor, setCursor, listDueRetryUids, listStaleUids, reserveRateLimit, getDailyGate, setDailyGate, close }
 }

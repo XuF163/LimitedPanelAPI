@@ -3,6 +3,7 @@ import { cmdSampleCollect } from "./samples/collect.js"
 import { cmdPresetGenerate } from "./preset/generate.js"
 import { cmdScoreCalc } from "./score/calc.js"
 import { cmdVerifyLiangshi } from "./verify/liangshi.js"
+import { cmdVerifyPreset } from "./verify/preset.js"
 
 export async function run(argv) {
   const [ command = "" ] = argv
@@ -17,6 +18,8 @@ export async function run(argv) {
       return await cmdScoreCalc(argv.slice(1))
     case "verify:liangshi":
       return await cmdVerifyLiangshi(argv.slice(1))
+    case "verify:preset":
+      return await cmdVerifyPreset(argv.slice(1))
     default:
       console.log(`Usage:
   node src/cli.js meta:sync [--game gs|sr|all]
@@ -29,6 +32,7 @@ export async function run(argv) {
   node src/cli.js score:calc --game gs --file <PlayerData.json> [--charId 10000002]
   node src/cli.js score:calc --game sr --file <PlayerData.json> [--charId 1001]
   node src/cli.js verify:liangshi --uid 100000000 [--games gs,sr]
+  node src/cli.js verify:preset --game gs --uid 100000000 [--threshold 300]
 `)
   }
 }

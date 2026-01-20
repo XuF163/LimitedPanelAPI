@@ -1,4 +1,5 @@
 import { enka } from "../config.js"
+import { resolveEnkaUserAgent } from "./headers.js"
 
 export class EnkaHttpError extends Error {
   constructor(uid, status, body) {
@@ -12,7 +13,7 @@ export class EnkaHttpError extends Error {
 
 export async function fetchEnkaSr(uid, options = {}) {
   const baseUrl = options.baseUrl || enka.baseUrl
-  const userAgent = options.userAgent || enka.userAgent
+  const userAgent = options.userAgent || (await resolveEnkaUserAgent("sr")) || enka.userAgent
   const timeoutMs = options.timeoutMs ?? enka.timeoutMs
   const dispatcher = options.dispatcher
 

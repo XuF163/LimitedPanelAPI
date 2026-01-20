@@ -4,6 +4,7 @@ out/
 resources/meta-gs/
 resources/meta-sr/
 bin/
+rust/**/target/
 .env
 config/config.yaml
 config/config.json

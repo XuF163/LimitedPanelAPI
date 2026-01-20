@@ -66,6 +66,10 @@ samples:
       uidEnd: null
 
     maxCount: 20000
+    # Enka 请求实现：js | rust | auto
+    # - auto：有代理且 Rust 二进制可用时使用 rust，否则回退到 js
+    # - rust：强制使用 rust（无代理也可用，但仅进程内限速；不走 sqlite 全局限速，可能触发 429）
+    fetcher: auto
     # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
     concurrency: 20
     # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
@@ -93,6 +97,17 @@ samples:
       afterSec: 86400
       # 每次运行优先重扫多少个 UID（按 last_checked_at 最旧优先）
       first: 20000
+
+    # 每日扫描终止线：当默认极限面板（out/<game>/<preset.uid>.json）中
+    # 所有 meta 角色都达到阈值后，当天不再继续扫描该游戏。
+    # - 触发/更新时机：每次 preset:generate 后写入 scan.sqlite 的 scan_daily_gate 表
+    # - 跳过扫描逻辑：start.js 的自动采样会读取 scan_daily_gate 并在当天直接跳过
+    dailyGate:
+      enabled: false
+      threshold:
+        gs: 300
+        sr: 300
+        zzz: 590
 
 preset:
   uid: "100000000"
@@ -153,8 +168,15 @@ proxy:
   subscription:
     # 订阅链接列表（支持：base64/vmess/vless/trojan/ss、以及 Clash YAML 的 proxies:）
     urls: []
+    # 订阅解析实现：js | rust | auto
+    # - auto：Rust 二进制可用时使用 rust，否则回退到 js
+    # - rust：强制使用 rust（不可用则报错）
+    parser: auto
     # 订阅拉取超时（毫秒）
     timeoutMs: 30000
+    # 允许订阅站 TLS 证书错误（curl -k）。默认关闭；仅在你确定订阅来源可信时开启。
+    # 解决某些站点在 Windows/curl schannel 下报错：SEC_E_WRONG_PRINCIPAL。
+    insecureSkipVerify: false
     # 拉取失败时允许使用本地缓存（更抗网络抖动/对方偶发 reset）
     useCacheOnFail: true
     # 订阅缓存目录（按 URL hash 保存原始文本）

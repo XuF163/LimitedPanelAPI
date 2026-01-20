@@ -14,10 +14,18 @@ function parseSrAttrId(attrId) {
   return { affixId, cnt, step }
 }
 
+const DEFAULT_SR_WEIGHTS = {
+  atk: 75,
+  cpct: 100,
+  cdmg: 100,
+  dmg: 100,
+  speed: 100
+}
+
 export function getSrWeights(meta, { charId, charName } = {}) {
   const name = charName || meta?.character?.byId?.[Number(charId)]?.name || ""
   const weights = meta?.artifact?.usefulAttr?.[name]
-  return weights && typeof weights === "object" ? weights : {}
+  return weights && typeof weights === "object" ? weights : DEFAULT_SR_WEIGHTS
 }
 
 export function calcSrBuildMark(meta, build) {
@@ -41,4 +49,3 @@ export function calcSrBuildMark(meta, build) {
   const mark = Math.round(sum * 1000) / 10
   return { mark, weights }
 }
-

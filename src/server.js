@@ -10,7 +10,8 @@ import { paths, projectRoot } from "./config.js"
 import { loadAppConfig } from "./user-config.js"
 import { cmdMetaSync } from "./meta/sync.js"
 import { openProxyDb } from "./db/proxy.js"
-import { loadSubscriptionNodes, nodeKey as subscriptionNodeKey, parseSubscriptionText } from "./proxy/subscription.js"
+import { openScanDb } from "./db/sqlite.js"
+import { loadSubscriptionNodes, nodeKey as subscriptionNodeKey, parseSubscriptionText, parseSubscriptionTextAsync } from "./proxy/subscription.js"
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
@@ -27,6 +28,13 @@ async function execText(file, args = [], { timeoutMs = 5000 } = {}) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function formatLocalDay(date = new Date()) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, "0")
+  const d = String(date.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
 }
 
 async function findListeningPids(port) {
@@ -269,6 +277,16 @@ function normalizeSamplesMode(m, fallback = "playerdata") {
   return [ "playerdata", "enka" ].includes(s) ? s : fallback
 }
 
+function normalizeEnkaFetcherMode(m, fallback = "auto") {
+  const s = String(m || "").trim().toLowerCase()
+  return [ "js", "rust", "auto" ].includes(s) ? s : fallback
+}
+
+function normalizeSubParserMode(m, fallback = "auto") {
+  const s = String(m || "").trim().toLowerCase()
+  return [ "js", "rust", "auto" ].includes(s) ? s : fallback
+}
+
 function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
   const serverPort = Math.max(1, Math.min(65535, toInt(input?.server?.port, toInt(effectiveCfg?.server?.port, 4567))))
   const serverHost = toStr(input?.server?.host, toStr(effectiveCfg?.server?.host, "0.0.0.0")).trim() || "0.0.0.0"
@@ -334,6 +352,7 @@ function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
   ensureZzz8Digits(enkaZzz.uidEnd, "uidEnd")
 
   const enkaMaxCount = Math.max(1, toInt(enkaIn?.maxCount, toInt(effectiveCfg?.samples?.enka?.maxCount, 20)))
+  const enkaFetcher = normalizeEnkaFetcherMode(enkaIn?.fetcher, normalizeEnkaFetcherMode(effectiveCfg?.samples?.enka?.fetcher, "auto"))
   const enkaConcurrency = Math.max(1, Math.min(50, toInt(enkaIn?.concurrency, toInt(effectiveCfg?.samples?.enka?.concurrency, 1))))
 
   const hasGsEnka = hasSelector(enkaGs)
@@ -348,6 +367,10 @@ function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
   const zzzPluginDir = toStr(input?.zzz?.source?.pluginDir, toStr(effectiveCfg?.zzz?.source?.pluginDir, "")).trim()
 
   const proxyEnabled = toBool(input?.proxy?.enabled, toBool(effectiveCfg?.proxy?.enabled, false))
+  const proxySubParser = normalizeSubParserMode(
+    input?.proxy?.subscription?.parser,
+    normalizeSubParserMode(effectiveCfg?.proxy?.subscription?.parser, "auto")
+  )
 
   const minimal = {
     server: {
@@ -377,6 +400,12 @@ function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
     }
   }
 
+  if (proxySubParser !== "auto" || input?.proxy?.subscription?.parser != null) {
+    minimal.proxy.subscription = {
+      parser: proxySubParser
+    }
+  }
+
   if (uiAllowRemote || uiToken) {
     minimal.server.ui = {
       allowRemote: uiAllowRemote,
@@ -395,6 +424,7 @@ function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
     if (hasGsEnka || hasSrEnka || hasZzzEnka) {
       minimal.samples.enka = {
         maxCount: enkaMaxCount,
+        fetcher: enkaFetcher,
         concurrency: enkaConcurrency,
         ...(hasGsEnka ? { gs: enkaGs } : {}),
         ...(hasSrEnka ? { sr: enkaSr } : {}),
@@ -404,6 +434,7 @@ function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
   } else {
     minimal.samples.enka = {
       maxCount: enkaMaxCount,
+      fetcher: enkaFetcher,
       concurrency: enkaConcurrency,
       gs: enkaGs,
       sr: enkaSr,
@@ -611,6 +642,49 @@ const server = http.createServer((req, res) => {
     })
   }
 
+  // WebUI: daily scan gate status (scan_daily_gate)
+  // GET /api/samples/gate?game=gs|sr|zzz|all
+  if (url.pathname === "/api/samples/gate") {
+    const auth = authUi(req, cfg)
+    if (!auth.ok) return sendJson(res, auth.code, { error: auth.error })
+
+    if (req.method !== "GET") return sendJson(res, 405, { error: "method_not_allowed" })
+
+    const q = String(url.searchParams.get("game") || "all").toLowerCase()
+    const games = q === "all" ? [ "gs", "sr", "zzz" ] : [ q ]
+    if (!games.every((g) => [ "gs", "sr", "zzz" ].includes(g))) {
+      return sendJson(res, 400, { error: "invalid_game" })
+    }
+
+    const day = formatLocalDay(new Date())
+
+    const parseJsonSafe = (text) => {
+      try { return JSON.parse(String(text)) } catch { return null }
+    }
+
+    const db = openScanDb()
+    try {
+      const gates = {}
+      for (const g of games) {
+        const row = db.getDailyGate?.(g, day)
+        gates[g] = row
+          ? {
+              game: row.game,
+              day: row.day,
+              done: Boolean(row.done),
+              doneAt: row.done_at ?? null,
+              totalChars: row.total_chars ?? null,
+              qualifiedChars: row.qualified_chars ?? null,
+              detail: parseJsonSafe(row.detail_json)
+            }
+          : null
+      }
+      return sendJson(res, 200, { ok: true, day, gates })
+    } finally {
+      db.close()
+    }
+  }
+
   // WebUI: proxy nodes summary
   // GET /api/proxy/nodes/summary
   if (url.pathname === "/api/proxy/nodes/summary") {
@@ -676,7 +750,9 @@ const server = http.createServer((req, res) => {
               timeoutMs,
               cacheDir,
               cacheTtlSec,
-              useCacheOnFail
+              useCacheOnFail,
+              insecureSkipVerify: Boolean(cfg?.proxy?.subscription?.insecureSkipVerify ?? false),
+              parser: cfg?.proxy?.subscription?.parser
             }))
           )
         } catch (e) {
@@ -684,7 +760,7 @@ const server = http.createServer((req, res) => {
         }
       }
       if (rawText) {
-        nodes.push(...parseSubscriptionText(rawText))
+        nodes.push(...(await parseSubscriptionTextAsync(rawText, { parser: cfg?.proxy?.subscription?.parser })))
       }
 
       // 2) Dedupe and insert into DB (do not show existing)

@@ -6,6 +6,7 @@ import { loadAppConfig } from "./user-config.js"
 import { cmdMetaSync } from "./meta/sync.js"
 import { cmdSampleCollect } from "./samples/collect.js"
 import { collectPlayerDataSamples } from "./samples/collect-playerdata.js"
+import { shouldSkipEnkaScanToday, updateDailyGateFromPreset } from "./samples/daily-gate.js"
 import { cmdPresetGenerate } from "./preset/generate.js"
 import { openScanDb } from "./db/sqlite.js"
 import { ensureProxyPool } from "./proxy/pool.js"
@@ -75,6 +76,13 @@ function getEnkaUidSelector(cfg, game) {
   return { uids, uidStart, uidEnd, countCfg, configured }
 }
 
+function getAutoSampleMode(cfg, game) {
+  const { configured: enkaConfigured } = getEnkaUidSelector(cfg, game)
+  const cfgModeRaw = (process.env.SAMPLE_MODE || cfg?.samples?.mode || (enkaConfigured ? "enka" : "playerdata")).toLowerCase()
+  const sampleMode = game === "zzz" ? "enka" : cfgModeRaw
+  return { sampleMode, enkaConfigured }
+}
+
 function hasAnySamples(game) {
   const dir = paths.samplesDir(game)
   if (!fs.existsSync(dir)) return false
@@ -125,7 +133,7 @@ async function ensureMeta(game, { force = false } = {}) {
   await cmdMetaSync([ "--game", game ])
 }
 
-async function ensureSamples(game, { force = false } = {}) {
+async function ensureSamples(game, { force = false, maxCountOverride = null } = {}) {
   const { data: cfg } = loadAppConfig()
 
   const { uids: enkaUids, uidStart, uidEnd, countCfg, configured: enkaConfigured } = getEnkaUidSelector(cfg, game)
@@ -136,10 +144,18 @@ async function ensureSamples(game, { force = false } = {}) {
   if (!force && !alwaysSample && hasAnySamples(game)) return
 
   if (sampleMode === "enka") {
+    if (await shouldSkipEnkaScanToday(game, cfg, { force })) {
+      console.log(`[auto] sample:collect (enka) skipped game=${game} (daily gate reached)`)
+      return
+    }
+
     const delayMs = envNum("ENKA_DELAY_MS", cfg?.samples?.enka?.delayMs ?? 20_000)
     const jitterMs = envNum("ENKA_JITTER_MS", cfg?.samples?.enka?.jitterMs ?? 2_000)
     const concurrency = Math.max(1, Math.min(50, envNum("ENKA_CONCURRENCY", cfg?.samples?.enka?.concurrency ?? 1)))
-    const maxCount = envNum("ENKA_MAX_COUNT", cfg?.samples?.enka?.maxCount ?? 20)
+    const maxCount =
+      (Number.isFinite(Number(maxCountOverride)) && Number(maxCountOverride) > 0)
+        ? Number(maxCountOverride)
+        : envNum("ENKA_MAX_COUNT", cfg?.samples?.enka?.maxCount ?? 20)
     const cfgSaveRawFile = cfg?.samples?.enka?.saveRawFile ?? cfg?.samples?.enka?.saveRaw ?? false
     const saveRaw = envBool("ENKA_NO_RAW", false) ? false : cfgSaveRawFile
 
@@ -320,7 +336,23 @@ async function ensurePreset(game, { force = false } = {}) {
   const outPath = path.join(paths.outDir(game), `${uid}.json`)
   const alwaysGenerate = envBool("PRESET_ALWAYS", cfg?.preset?.alwaysGenerate ?? true)
 
-  if (!force && !alwaysGenerate && fs.existsSync(outPath)) return
+  const updateGate = async () => {
+    try {
+      const row = await updateDailyGateFromPreset(game, cfg, { presetUid: uid, presetPath: outPath, force: false })
+      if (!row) return
+      const done = Boolean(row.done)
+      const total = Number(row.total_chars || 0) || 0
+      const qualified = Number(row.qualified_chars || 0) || 0
+      console.log(`[preset] gate game=${game} done=${done ? 1 : 0} qualified=${qualified}/${total} day=${row.day || ""}`.trim())
+    } catch (e) {
+      console.warn(`[preset] gate update failed game=${game}: ${e?.message || String(e)}`)
+    }
+  }
+
+  if (!force && !alwaysGenerate && fs.existsSync(outPath)) {
+    await updateGate()
+    return
+  }
 
   console.log(`[auto] preset:generate --game ${game} --uid ${uid}`)
   const argv = [
@@ -331,6 +363,7 @@ async function ensurePreset(game, { force = false } = {}) {
   ]
   if (limitChars > 0) argv.push("--limitChars", String(limitChars))
   await cmdPresetGenerate(argv)
+  await updateGate()
 }
 
 async function main() {
@@ -355,11 +388,32 @@ async function main() {
     await startServer({ port })
   }
 
-  // Optional proxy pool (v2ray-core). This sets PROXY_URLS for Enka fetchers.
-  const proxyPool = await ensureProxyPool(cfg)
+  // Optional proxy pool (v2ray-core). This dynamically updates PROXY_URLS for Enka fetchers.
+  const preservedProxyUrlsEnv = String(process.env.PROXY_URLS || "").trim()
+  const setProxyUrlsEnv = (urls) => {
+    const list = Array.isArray(urls) ? urls.map(String).map((s) => s.trim()).filter(Boolean) : []
+    if (list.length > 0) process.env.PROXY_URLS = list.join(",")
+    else if (preservedProxyUrlsEnv) process.env.PROXY_URLS = preservedProxyUrlsEnv
+    else delete process.env.PROXY_URLS
+  }
+
+  const proxyPoolPromise = ensureProxyPool(cfg, {
+    onUpdate: (urls) => setProxyUrlsEnv(urls)
+  })
+    .then((pool) => {
+      if (pool?.enabled) console.log(`[auto] proxy pool: ${Array.isArray(pool.proxyUrls) ? pool.proxyUrls.length : 0}`)
+      return pool
+    })
+    .catch((e) => {
+      console.warn(`[auto] proxy pool failed; continue without proxy: ${e?.message || String(e)}`)
+      setProxyUrlsEnv([])
+      return null
+    })
+
   const cleanupProxyPool = async () => {
     try {
-      await proxyPool?.close?.()
+      const pool = await proxyPoolPromise
+      await pool?.close?.()
     } catch {}
   }
   // Best-effort cleanup on signals.
@@ -367,26 +421,58 @@ async function main() {
   process.on("SIGTERM", () => { cleanupProxyPool(); process.exit(143) })
 
   try {
-    if (proxyPool?.enabled) {
-      const proxyUrls = Array.isArray(proxyPool.proxyUrls) ? proxyPool.proxyUrls : []
-      if (proxyUrls.length > 0) {
-        process.env.PROXY_URLS = proxyUrls.join(",")
-        console.log(`[auto] proxy pool: ${proxyUrls.length}`)
-      } else {
-        delete process.env.PROXY_URLS
-        console.log(`[auto] proxy pool: none`)
-      }
-    }
-
     if (cfg?.meta?.autoSync ?? true) {
       for (const g of [ "gs", "sr" ]) {
         await ensureMeta(g, { force }).catch((e) => console.warn(`[auto] meta:sync failed game=${g}: ${e?.message || String(e)}`))
       }
     }
 
+    const enkaGames = []
     for (const g of games) {
-      await ensureSamples(g, { force }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
-      await ensurePreset(g, { force }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+      const { sampleMode, enkaConfigured } = getAutoSampleMode(cfg, g)
+      if (sampleMode === "enka" && enkaConfigured) enkaGames.push(g)
+    }
+
+    // If multiple games are scanning Enka, do a round-robin scan so we don't finish gs first
+    // and only then start sr/zzz. This also helps keep progress visible across games.
+    if (enkaGames.length >= 2) {
+      const maxCount = envNum("ENKA_MAX_COUNT", cfg?.samples?.enka?.maxCount ?? 20)
+      const cc = Math.max(1, Math.min(50, envNum("ENKA_CONCURRENCY", cfg?.samples?.enka?.concurrency ?? 1)))
+      const stepCount = Math.max(50, Math.min(1000, envNum("ENKA_RR_STEP", cc * 10)))
+      console.log(`[auto] enka round-robin: games=${enkaGames.join(",")} maxCount=${maxCount} stepCount=${stepCount}`)
+
+      // Enable sqlite-backed per-proxy rate limit so delayMs does not reset between games.
+      if (!process.env.ENKA_PROXY_RATE_LIMIT) process.env.ENKA_PROXY_RATE_LIMIT = "sqlite"
+
+      const remaining = Object.fromEntries(enkaGames.map((g) => [g, maxCount]))
+      while (true) {
+        let did = false
+        for (const g of games) {
+          const rem = Number(remaining[g] || 0)
+          if (rem <= 0) continue
+          const per = Math.min(stepCount, rem)
+          await ensureSamples(g, { force, maxCountOverride: per }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+          remaining[g] = Math.max(0, rem - per)
+          did = true
+        }
+        if (!did) break
+        if (enkaGames.every((g) => Number(remaining[g] || 0) <= 0)) break
+      }
+
+      // Non-Enka games (playerdata) still run once.
+      for (const g of games) {
+        if (enkaGames.includes(g)) continue
+        await ensureSamples(g, { force }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+      }
+
+      for (const g of games) {
+        await ensurePreset(g, { force }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+      }
+    } else {
+      for (const g of games) {
+        await ensureSamples(g, { force }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+        await ensurePreset(g, { force }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+      }
     }
   } finally {
     // Proxies are only needed during sampling; close them after preset generation.
@@ -436,15 +522,28 @@ async function main() {
     console.log(`[auto] preset:autoRefresh begin games=${games.join(",")} intervalSec=${intervalSec} force=${forceRefresh}`)
 
     // Optional proxy pool only for this refresh cycle.
+    const preservedProxyUrlsEnvRefresh = String(process.env.PROXY_URLS || "").trim()
+    const setProxyUrlsEnvRefresh = (urls) => {
+      const list = Array.isArray(urls) ? urls.map(String).map((s) => s.trim()).filter(Boolean) : []
+      if (list.length > 0) process.env.PROXY_URLS = list.join(",")
+      else if (preservedProxyUrlsEnvRefresh) process.env.PROXY_URLS = preservedProxyUrlsEnvRefresh
+      else delete process.env.PROXY_URLS
+    }
+    const poolPromise = ensureProxyPool(cfg2, {
+      onUpdate: (urls) => setProxyUrlsEnvRefresh(urls)
+    })
+      .then((p) => {
+        if (p?.enabled) console.log(`[auto] proxy pool: ${Array.isArray(p.proxyUrls) ? p.proxyUrls.length : 0}`)
+        return p
+      })
+      .catch((e) => {
+        console.warn(`[auto] proxy pool failed; continue without proxy: ${e?.message || String(e)}`)
+        setProxyUrlsEnvRefresh([])
+        return null
+      })
+
     let pool = null
     try {
-      pool = await ensureProxyPool(cfg2)
-      if (pool?.enabled) {
-        const proxyUrls = Array.isArray(pool.proxyUrls) ? pool.proxyUrls : []
-        if (proxyUrls.length > 0) process.env.PROXY_URLS = proxyUrls.join(",")
-        else delete process.env.PROXY_URLS
-      }
-
       // Ensure meta exists; meta updates are handled by meta.autoUpdate.
       if (cfg2?.meta?.autoSync ?? true) {
         for (const mg of [ "gs", "sr" ]) {
@@ -452,15 +551,57 @@ async function main() {
         }
       }
 
+      const enkaGames = []
       for (const g of games) {
-        await ensureSamples(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
-        await ensurePreset(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+        const { sampleMode, enkaConfigured } = getAutoSampleMode(cfg2, g)
+        if (sampleMode === "enka" && enkaConfigured) enkaGames.push(g)
+      }
+
+      if (enkaGames.length >= 2) {
+        const maxCount = envNum("ENKA_MAX_COUNT", cfg2?.samples?.enka?.maxCount ?? 20)
+        const cc = Math.max(1, Math.min(50, envNum("ENKA_CONCURRENCY", cfg2?.samples?.enka?.concurrency ?? 1)))
+        const stepCount = Math.max(50, Math.min(1000, envNum("ENKA_RR_STEP", cc * 10)))
+        console.log(`[auto] enka round-robin: games=${enkaGames.join(",")} maxCount=${maxCount} stepCount=${stepCount}`)
+
+        if (!process.env.ENKA_PROXY_RATE_LIMIT) process.env.ENKA_PROXY_RATE_LIMIT = "sqlite"
+
+        const remaining = Object.fromEntries(enkaGames.map((g) => [g, maxCount]))
+        while (true) {
+          let did = false
+          for (const g of games) {
+            const rem = Number(remaining[g] || 0)
+            if (rem <= 0) continue
+            const per = Math.min(stepCount, rem)
+            await ensureSamples(g, { force: forceRefresh, maxCountOverride: per }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+            remaining[g] = Math.max(0, rem - per)
+            did = true
+          }
+          if (!did) break
+          if (enkaGames.every((g) => Number(remaining[g] || 0) <= 0)) break
+        }
+
+        for (const g of games) {
+          if (enkaGames.includes(g)) continue
+          await ensureSamples(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+        }
+
+        for (const g of games) {
+          await ensurePreset(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+        }
+      } else {
+        for (const g of games) {
+          await ensureSamples(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] sample failed game=${g}: ${e?.message || String(e)}`))
+          await ensurePreset(g, { force: forceRefresh }).catch((e) => console.warn(`[auto] preset failed game=${g}: ${e?.message || String(e)}`))
+        }
       }
 
       lastRefreshAt = Date.now()
       console.log(`[auto] preset:autoRefresh done games=${games.join(",")}`)
     } finally {
-      try { await pool?.close?.() } catch {}
+      try {
+        pool = await poolPromise
+        await pool?.close?.()
+      } catch {}
     }
   }
 

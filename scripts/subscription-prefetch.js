@@ -28,7 +28,13 @@ async function main() {
   console.log(`[prefetch] config=${userPath}`)
   console.log(`[prefetch] urls=${urls.length} timeoutMs=${timeoutMs} cacheDir=${cacheDir} cacheTtlSec=${cacheTtlSec} useCacheOnFail=${useCacheOnFail}`)
 
-  const nodes = await loadSubscriptionNodes(urls, { timeoutMs, cacheDir, cacheTtlSec, useCacheOnFail })
+  const nodes = await loadSubscriptionNodes(urls, {
+    timeoutMs,
+    cacheDir,
+    cacheTtlSec,
+    useCacheOnFail,
+    insecureSkipVerify: Boolean(cfg?.proxy?.subscription?.insecureSkipVerify ?? false)
+  })
   console.log(`[prefetch] nodes parsed: ${nodes.length}`)
 }
 
@@ -36,4 +42,3 @@ main().catch((err) => {
   console.error(err?.stack || err)
   process.exitCode = 1
 })
-

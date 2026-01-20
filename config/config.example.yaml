@@ -35,7 +35,14 @@ samples:
       uidStart: null
       uidEnd: null
     maxCount: 20
+    fetcher: auto
     concurrency: 1
+    dailyGate:
+      enabled: false
+      threshold:
+        gs: 300
+        sr: 300
+        zzz: 590
 
 preset:
   # gs/sr 默认 100000000；zzz 默认 10000000（由程序自动处理）

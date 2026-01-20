@@ -77,6 +77,59 @@ function genExtremeAttrIds(meta, keys) {
   return ids
 }
 
+function pickBestMainKeyGs(meta, charCfg, idx, elem) {
+  const list = Array.isArray(meta?.artifact?.mainAttr?.[idx]) ? meta.artifact.mainAttr[idx] : []
+  if (!list.length) return null
+
+  let bestKey = null
+  let bestW = -1
+  for (const k of list) {
+    const key = String(k || "").trim()
+    if (!key) continue
+    const w = Number(charCfg?.attrs?.[key]?.fixWeight || 0)
+    if (w > bestW) {
+      bestW = w
+      bestKey = key
+    }
+  }
+
+  // Goblet special: if best is "dmg", map to element key for mainId selection.
+  if (idx === 4 && bestKey === "dmg") {
+    const e = String(elem || "").trim()
+    const knownElems = [ "pyro", "hydro", "electro", "cryo", "anemo", "geo", "dendro" ]
+    if (knownElems.includes(e)) return e
+
+    // Fallback for traveler/unknown (e.g. elem=multi): pick any elemental goblet mainKey.
+    for (const [ idStr, key ] of Object.entries(meta?.artifact?.mainIdMap || {})) {
+      const id = Number(idStr)
+      if (!Number.isFinite(id)) continue
+      if (Math.floor(id / 1000) !== 15) continue
+      const k = String(key || "").trim()
+      if (knownElems.includes(k)) return k
+    }
+
+    // Meta should always have pyro; keep a deterministic fallback anyway.
+    return "pyro"
+  }
+  return bestKey
+}
+
+function pickBestMainIdGs(meta, charCfg, idx, elem, fallbackMainId) {
+  const expectedGroup = idx === 3 ? 10 : (idx === 4 ? 15 : (idx === 5 ? 13 : null))
+  const bestKey = pickBestMainKeyGs(meta, charCfg, idx, elem)
+  if (!bestKey || expectedGroup == null) return fallbackMainId
+
+  const pairs = Object.entries(meta?.artifact?.mainIdMap || {})
+  for (const [ idStr, key ] of pairs) {
+    const id = Number(idStr)
+    if (!Number.isFinite(id)) continue
+    if (Math.floor(id / 1000) !== expectedGroup) continue
+    if (String(key || "").trim() !== bestKey) continue
+    return id
+  }
+  return fallbackMainId
+}
+
 async function selectBestSample(meta, charId) {
   const file = path.join(paths.samplesDir("gs"), `${charId}.jsonl`)
   if (!fs.existsSync(file)) return null
@@ -145,7 +198,8 @@ async function selectBestSampleSr(meta, charId) {
   for (const r of rows) {
     const mark = calcSrBuildMark(meta, {
       charId: Number(r.charId),
-      charName: r.charName || charName,
+      // Always prefer meta name. Old samples might contain mojibake charName and break weights lookup.
+      charName,
       artis: r.artis
     })
     if (mark.mark > bestMark) {
@@ -223,11 +277,13 @@ export async function cmdPresetGenerate(argv) {
         affix: 5
       }
 
+      const resolvedElem = String(best.elem || charMeta.elem || "").trim()
+
       const baseBuild = {
         charId,
         charName: charMeta.name,
         charAbbr: charMeta.abbr,
-        elem: charMeta.elem,
+        elem: resolvedElem,
         cons: 6,
         weapon,
         artis: best.artis
@@ -241,14 +297,17 @@ export async function cmdPresetGenerate(argv) {
       for (const idx of [ 1, 2, 3, 4, 5 ]) {
         const piece = best.artis[idx]
         if (!piece) continue
-        const mainKey = meta.artifact.mainIdMap[piece.mainId]
+        const mainId = idx >= 3
+          ? pickBestMainIdGs(meta, charCfg, idx, resolvedElem, piece.mainId)
+          : piece.mainId
+        const mainKey = meta.artifact.mainIdMap[mainId]
         const keys = pickTopSubKeys(meta, charCfg, mainKey, 4)
         const attrIds = genExtremeAttrIds(meta, keys)
         artisOut[idx] = {
           level: 20,
           star: 5,
           name: piece.name,
-          mainId: piece.mainId,
+          mainId,
           attrIds
         }
       }
@@ -256,7 +315,7 @@ export async function cmdPresetGenerate(argv) {
       const avatar = {
         name: charMeta.name,
         id: charId,
-        elem: charMeta.elem,
+        elem: resolvedElem,
         level: 100,
         promote: 6,
         fetter: 10,
@@ -276,11 +335,12 @@ export async function cmdPresetGenerate(argv) {
       const extremeMark = await calcGsBuildMark(meta, {
         charId,
         charName: charMeta.name,
-        elem: charMeta.elem,
+        elem: resolvedElem,
         cons: 6,
         weapon,
         artis: artisOut
       })
+      avatar._mark = { mark: extremeMark.mark }
       if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
     }
 
@@ -376,6 +436,7 @@ export async function cmdPresetGenerate(argv) {
         charName: charMeta.name,
         artis: artisOut
       })
+      avatar._mark = { mark: extremeMark.mark }
       if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
     }
 
@@ -447,6 +508,7 @@ export async function cmdPresetGenerate(argv) {
       result.avatars[String(charId)] = outAvatar
 
       const extremeMark = calcZzzAvatarMark({ ...baseAvatar, equip: extremeEquip })
+      outAvatar._mark = { mark: extremeMark.mark }
       if (!args.quiet) console.log(`${charId} ${outAvatar.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}${weaponPick?.signature ? " sigWeapon" : ""}`)
     }
 

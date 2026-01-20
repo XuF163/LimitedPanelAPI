@@ -357,14 +357,27 @@ async function compareWithLiangshiMiaoThreshold({ game, uid, threshold }) {
 async function runGameScan({ game, uidStart, maxUids, batchSize, stepSize, delayMs, concurrency, targetCharFiles, scanDbPath }) {
   const samplesDir = path.join(projectRoot, "data", "samples", game)
   await ensureDir(samplesDir)
-  await emptyDir(samplesDir)
+  const resetSamples = toBool(process.env.QA_RESET_SAMPLES, true)
+  if (resetSamples) await emptyDir(samplesDir)
 
   const proxyCount = String(process.env.PROXY_URLS || "").split(",").filter(Boolean).length || 0
 
   let nextUid = uidStart
   let scanned = 0
   let stableNoGain = 0
-  let lastCharFiles = 0
+  let lastCharFiles = (await listJsonlFiles(samplesDir)).length
+
+  // Allow a "verify-only" mode that reuses existing samples without scanning.
+  if (maxUids <= 0) {
+    return {
+      game,
+      uidStart,
+      scanned: 0,
+      durationSec: 0,
+      sampleChars: lastCharFiles,
+      scanDbPath
+    }
+  }
 
   const t0 = nowMs()
   while (scanned < maxUids) {
@@ -663,9 +676,12 @@ async function main() {
       console.log(`[${game}] pass=${g?.pass} scanned=${g?.scan?.scanned} sampleChars=${g?.scan?.sampleChars} common=${v?.common} passRate=${v?.passRate} meanAbs=${v?.diffStats?.meanAbs} p90Abs=${v?.diffStats?.p90Abs} maxAbs=${v?.diffStats?.maxAbs}`)
     }
   }
+
+  // Ensure this script terminates even if some imported modules keep handles open.
+  process.exit(results.pass ? 0 : 1)
 }
 
 main().catch((err) => {
   console.error(err?.stack || err)
-  process.exitCode = 1
+  process.exit(1)
 })

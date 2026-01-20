@@ -1,14 +1,18 @@
+import { spawn } from "node:child_process"
+import { createInterface } from "node:readline"
 import path from "node:path"
-import { paths } from "../config.js"
+import { enka, paths } from "../config.js"
 import { EnkaHttpError as EnkaHttpErrorGs, fetchEnkaGs } from "../enka/gs.js"
 import { EnkaHttpError as EnkaHttpErrorSr, fetchEnkaSr } from "../enka/sr.js"
 import { EnkaHttpError as EnkaHttpErrorZzz, fetchEnkaZzz, extractEnkaZzzAvatarList, enkaZzzToMysAvatars } from "../enka/zzz.js"
+import { resolveEnkaUserAgent } from "../enka/headers.js"
 import { appendJsonl, sleep, writeJson } from "../utils/fs.js"
 import { loadGsMeta } from "../meta/gs.js"
 import { loadSrMeta } from "../meta/sr.js"
 import { openScanDb } from "../db/sqlite.js"
 import { loadAppConfig } from "../user-config.js"
 import { ProxyAgent } from "undici"
+import { ensureLimitedPanelRsBinary } from "../rust/runner.js"
 
 const artisIdxMap = {
   EQUIP_BRACER: 1,
@@ -74,6 +78,14 @@ function envNum(name, fallback) {
   if (raw == null || raw === "") return fallback
   const n = Number(raw)
   return Number.isFinite(n) ? n : fallback
+}
+
+function normalizeEnkaFetcherMode(raw) {
+  const s = String(raw || "").trim().toLowerCase()
+  if (!s) return "js"
+  if (s === "rs") return "rust"
+  if ([ "js", "rust", "auto" ].includes(s)) return s
+  return "js"
 }
 
 function pickWeapon(equipList = [], weaponById = {}) {
@@ -164,6 +176,10 @@ export async function cmdSampleCollect(argv) {
   const breakerOn429 = Boolean(cfg?.samples?.enka?.circuitBreaker?.breakOn429 ?? true)
   const quiet = Boolean(args.quiet || envBool("QUIET", false))
   const enkaTimeoutMs = Math.max(0, envNum("ENKA_TIMEOUT_MS", Number(cfg?.samples?.enka?.timeoutMs || 0)))
+  const proxyRateLimitMode = String(process.env.ENKA_PROXY_RATE_LIMIT || cfg?.samples?.enka?.proxyRateLimit || "memory")
+    .trim()
+    .toLowerCase()
+  const fetcherMode = normalizeEnkaFetcherMode(process.env.ENKA_FETCHER || cfg?.samples?.enka?.fetcher || "js")
 
   const proxyUrls = parseProxyUrls()
   const proxyDispatchers = proxyUrls.map((u) => new ProxyAgent(u))
@@ -263,6 +279,276 @@ export async function cmdSampleCollect(argv) {
       html: 0
     }
 
+    const processFetched = async (uid, data, text) => {
+      if (args.saveRaw) {
+        const rawPath = path.join(paths.rawDir(args.game), `${uid}.json`)
+        await writeJson(rawPath, data, 0)
+      }
+      // Store raw to sqlite when enabled (gzip). This is the preferred storage for large-scale scans.
+      scanDb.recordSuccess(uid, { game: args.game, status: 200, bodyText: text, storeRaw: storeRawDb })
+
+      if (args.game === "gs") {
+        const avatarList = data?.avatarInfoList || []
+        for (const ds of avatarList) {
+          const charId = ds.avatarId
+          const charMeta = meta.character.byId[charId] || {}
+          const weapon = pickWeapon(ds.equipList || [], meta.weapon.byId)
+          const artis = pickArtifacts(ds.equipList || [], meta.artifact.artifactPieceById)
+          const hasFive = [ 1, 2, 3, 4, 5 ].every((k) => artis[k]?.name && artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
+          if (!hasFive) continue
+
+          const rec = {
+            uid,
+            fetchedAt: Date.now(),
+            charId,
+            charName: charMeta.name || "",
+            elem: charMeta.elem || "",
+            weapon,
+            artis
+          }
+          const outPath = path.join(paths.samplesDir("gs"), `${charId}.jsonl`)
+          await appendJsonlSafe(outPath, rec)
+        }
+      } else if (args.game === "sr") {
+        const avatarList = data?.detailInfo?.avatarDetailList || []
+        for (const ds of avatarList) {
+          const charId = Number(ds?.avatarId)
+          if (!Number.isFinite(charId)) continue
+          const charMeta = meta.character.byId[charId] || {}
+          const weapon = pickWeaponSr(ds?.equipment || {})
+          const artis = pickArtifactsSr(ds?.relicList || [])
+          const hasSix = [ 1, 2, 3, 4, 5, 6 ].every((k) => artis[k]?.id && artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
+          if (!hasSix) continue
+
+          const rec = {
+            uid,
+            fetchedAt: Date.now(),
+            charId,
+            charName: charMeta.name || "",
+            elem: charMeta.elem || "",
+            weapon,
+            artis
+          }
+          const outPath = path.join(paths.samplesDir("sr"), `${charId}.jsonl`)
+          await appendJsonlSafe(outPath, rec)
+        }
+      } else {
+        const enkaAvatarList = extractEnkaZzzAvatarList(data)
+        const mysAvatars = await enkaZzzToMysAvatars(enkaAvatarList)
+        for (const a of mysAvatars) {
+          const charId = Number(a?.id)
+          if (!Number.isFinite(charId)) continue
+          const equip = Array.isArray(a?.equip) ? a.equip : []
+          if (equip.length < 6) continue
+          const rec = {
+            uid,
+            fetchedAt: Date.now(),
+            charId,
+            charName: String(a?.name_mi18n || a?.full_name_mi18n || ""),
+            avatar: {
+              id: a?.id,
+              name_mi18n: a?.name_mi18n,
+              full_name_mi18n: a?.full_name_mi18n,
+              level: a?.level,
+              element_type: a?.element_type,
+              avatar_profession: a?.avatar_profession,
+              rarity: a?.rarity,
+              rank: a?.rank,
+              weapon: a?.weapon || null,
+              equip
+            }
+          }
+          const outPath = path.join(paths.samplesDir("zzz"), `${charId}.jsonl`)
+          await appendJsonlSafe(outPath, rec)
+        }
+      }
+    }
+
+    let rustBin = null
+    const wantRustFetcher = fetcherMode === "rust" || (fetcherMode === "auto" && proxyUrls.length > 0)
+    if (wantRustFetcher) {
+      try {
+        rustBin = await ensureLimitedPanelRsBinary()
+      } catch (e) {
+        const msg = e?.message || String(e)
+        if (fetcherMode === "rust") throw e
+        if (!quiet) console.warn(`[samples] rust fetcher unavailable; fallback to js: ${msg}`)
+      }
+    } else if (fetcherMode === "rust" && proxyUrls.length === 0) {
+      // This should not happen, but keep a safe fallback.
+      if (!quiet) {
+        console.warn("[samples] ENKA_FETCHER=rust requested but rust binary unavailable; using js fetcher.")
+      }
+    }
+
+    if (rustBin) {
+      if (proxyRequired && proxyUrls.length === 0) {
+        console.warn("PROXY_REQUIRED=1 but PROXY_URLS is empty; stop scanning early.")
+      } else {
+        const uidsToFetch = []
+        for (let i = 0; i < uidList.length; i++) {
+          const uid = uidList[i]
+          const skip = scanDb.shouldSkipUid(uid, { game: args.game })
+          if (skip.skip) {
+            summary.skipped++
+            if (!quiet) console.log(`[${i + 1}/${uidList.length}] skip uid=${uid} (${skip.reason})`)
+            continue
+          }
+          uidsToFetch.push(uid)
+        }
+
+        if (uidsToFetch.length > 0) {
+          const ua = (await resolveEnkaUserAgent(args.game)) || enka.userAgent
+          const timeoutMs = Math.max(1, (enkaTimeoutMs > 0 ? enkaTimeoutMs : enka.timeoutMs))
+          const delayMs = Math.max(0, Number(args.delayMs) || 0)
+          const jitterMs = Math.max(0, Number(args.jitterMs) || 0)
+
+          // Safety: in no-proxy mode, keep concurrency=1 to avoid increasing QPS (each worker has its own throttle state).
+          const rustConcurrency = proxyUrls.length > 0 ? concurrency : 1
+          if (!quiet && proxyUrls.length === 0 && concurrency > 1) {
+            console.warn(`[samples] rust fetcher in no-proxy mode forces concurrency=1 (requested=${concurrency})`)
+          }
+
+          const rsArgv = [
+            "enka-fetch",
+            "--game", args.game,
+            "--uids-stdin",
+            "--timeout-ms", String(timeoutMs),
+            "--delay-ms", String(delayMs),
+            "--jitter-ms", String(jitterMs),
+            "--no-proxy-delay-ms", String(noProxyDelayMs),
+            "--concurrency", String(rustConcurrency),
+            "--proxy-max-consecutive-fails", String(maxProxyConsecutiveFails),
+            "--breaker-max-consecutive-fails", String(breakerMaxConsecutiveFails),
+            "--breaker-on-429", String(Boolean(breakerOn429)),
+            "--user-agent", ua
+          ]
+          if (args.game !== "zzz") rsArgv.push("--base-url", enka.baseUrl)
+          if (proxyUrls.length > 0) rsArgv.push("--proxy-urls", proxyUrls.join(","))
+
+          if (!quiet) {
+            console.log(`[samples] rust fetcher: uids=${uidsToFetch.length} proxies=${proxyUrls.length} concurrency=${concurrency} delayMs=${delayMs}`)
+          }
+
+          const child = spawn(rustBin, rsArgv, {
+            stdio: [ "pipe", "pipe", "inherit" ],
+            windowsHide: true
+          })
+
+          for (const uid of uidsToFetch) {
+            child.stdin.write(`${uid}\n`)
+          }
+          child.stdin.end()
+
+          const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
+          const exitCodePromise = new Promise((resolve, reject) => {
+            child.once("error", reject)
+            child.once("close", (code) => resolve(code))
+          })
+
+          let processed = 0
+          for await (const line of rl) {
+            const s = String(line || "").trim()
+            if (!s) continue
+            processed++
+
+            let row
+            try {
+              row = JSON.parse(s)
+            } catch (e) {
+              if (!quiet) console.warn(`[samples] rust invalid jsonl: ${String(e?.message || e)} line=${s.slice(0, 200)}`)
+              continue
+            }
+
+            const uid = Number(row?.uid)
+            if (!Number.isFinite(uid)) continue
+
+            const ok = Boolean(row?.ok)
+            const status = row?.status == null ? null : Number(row.status)
+            const isHtml = Boolean(row?.is_html)
+            const proxy = row?.proxy != null ? String(row.proxy) : ""
+
+            if (ok) {
+              summary.ok++
+              if (!quiet) console.log(`[${processed}/${uidsToFetch.length}] ok uid=${uid}${proxy ? ` proxy=${proxy}` : ""}`)
+
+              const text = String(row?.body || "")
+              let data
+              try {
+                data = JSON.parse(text)
+              } catch (e) {
+                const msg = `invalid json body: ${String(e?.message || e)}`
+                scanDb.recordFailure(uid, { game: args.game, status: 200, error: msg })
+                summary.byStatus["200"] = (summary.byStatus["200"] || 0) + 1
+                if (!quiet) console.warn(`  fetch failed: ${msg}`)
+                continue
+              }
+
+              await processFetched(uid, data, text)
+              continue
+            }
+
+            const msg = String(row?.error || (status != null ? `Enka HTTP ${status} uid=${uid}` : "fetch failed"))
+            if (isHtml) {
+              scanDb.recordFailure(uid, { game: args.game, status, error: msg })
+              summary.html++
+              if (status != null) summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
+              if (!quiet) console.warn(`  fetch failed: ${msg} (html)`)
+              continue
+            }
+
+            if (status === 400 || status === 404 || status === 403) {
+              scanDb.markPermanent(uid, { game: args.game, status, error: msg })
+              summary.permanent++
+              summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
+              if (!quiet) console.warn(`  fetch failed: ${msg} (permanent)`)
+              continue
+            }
+
+            if (status === 429) {
+              const retryAfterMs = Math.max(
+                5 * 60_000,
+                delayMs * 10,
+                Math.max(0, Number(row?.retry_after_ms || 0))
+              )
+              scanDb.recordFailure(uid, { game: args.game, status, error: msg, retryAfterMs })
+              summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
+              if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
+              continue
+            }
+
+            if (status != null) {
+              scanDb.recordFailure(uid, { game: args.game, status, error: msg })
+              summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
+              if (!quiet) console.warn(`  fetch failed: ${msg}`)
+              continue
+            }
+
+            scanDb.recordFailure(uid, { game: args.game, status: null, error: msg })
+            summary.transport++
+            if (!quiet) console.warn(`  fetch failed: ${msg}`)
+          }
+
+          const code = await exitCodePromise
+          if (code !== 0) throw new Error(`rust enka-fetch failed (code=${code})`)
+          if (!quiet && processed < uidsToFetch.length) {
+            console.warn(`[samples] rust fetcher finished early: got=${processed}/${uidsToFetch.length}`)
+          }
+        }
+      }
+
+      // Wait all queued writes.
+      await Promise.allSettled([ ...writeLocks.values() ])
+
+      if (quiet) {
+        console.log(`[done] game=${summary.game} total=${summary.total} ok=${summary.ok} skipped=${summary.skipped} permanent=${summary.permanent} transport=${summary.transport}`)
+        console.log(`[done] byStatus=${JSON.stringify(summary.byStatus)}`)
+      } else {
+        console.log("done.")
+      }
+      return
+    }
+
     const runOne = async (pos, uid, workerState) => {
       const skip = scanDb.shouldSkipUid(uid, { game: args.game })
       if (skip.skip) {
@@ -290,10 +576,22 @@ export async function cmdSampleCollect(argv) {
         }
       }
       // Throttle:
-      // - With proxy: bucketed throttling (per proxy) via in-memory scheduler.
+      // - With proxy: default is in-memory bucketed throttling. For multi-game round-robin scans
+      //   we can enable sqlite-backed throttling (cross cmdSampleCollect invocations) so the
+      //   per-proxy delayMs does not reset when switching games.
       // - Without proxy: global throttling via sqlite to keep *all games/processes combined*
       //   at a safe rate (e.g. 1 req / 20s).
-      if (!dispatcher && noProxyDelayMs > 0 && typeof scanDb.reserveRateLimit === "function") {
+      if (dispatcher && proxyRateLimitMode === "sqlite" && typeof scanDb.reserveRateLimit === "function") {
+        const baseDelayMs = Math.max(0, Number(args.delayMs) || 0)
+        const jitterMs = Math.max(0, Number(args.jitterMs) || 0)
+        const intervalMs = baseDelayMs + (jitterMs ? Math.floor(Math.random() * jitterMs) : 0)
+        const key = `enka:proxy:${proxyStates[bucket]?.url || bucket}`
+        const { waitMs } = scanDb.reserveRateLimit(key, intervalMs)
+        if (!quiet && waitMs > 0) {
+          console.log(`  throttle: waitMs=${waitMs} (proxy sqlite limit intervalMs=${intervalMs})`)
+        }
+        if (waitMs > 0) await sleep(waitMs)
+      } else if (!dispatcher && noProxyDelayMs > 0 && typeof scanDb.reserveRateLimit === "function") {
         const intervalMs = Math.max(0, Number(args.delayMs) || 0, noProxyDelayMs)
         const { waitMs } = scanDb.reserveRateLimit("enka:no-proxy:global", intervalMs)
         if (!quiet && waitMs > 0) {
@@ -325,6 +623,10 @@ export async function cmdSampleCollect(argv) {
           proxyStates[bucket].consecutiveTransportFails = 0
         }
       } catch (err) {
+        // Circuit breaker is designed for direct/no-proxy mode.
+        // With proxies enabled, failures are often per-node/per-IP; we rely on per-proxy disable instead of stopping the whole scan early.
+        const breakerEnabled = !dispatcher
+
         const markProxyTransportFail = () => {
           if (!proxyStates.length) return
           if (bucket < 0 || bucket >= proxyStates.length) return
@@ -346,19 +648,19 @@ export async function cmdSampleCollect(argv) {
            const bodyIsHtml = bodyTrim.startsWith("<")
           // If upstream returns HTML (WAF/ban page) via proxy, treat as proxy transport failure.
           // IMPORTANT: do NOT mark UID as permanent in this case (it is likely a proxy/WAF issue, not an invalid UID).
-          if (bodyIsHtml) {
-            markProxyTransportFail()
-            scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg })
-            summary.html++
-            summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
-            if (!quiet) console.warn(`  fetch failed: ${msg} (html)`)
-            consecutiveFails++
-            if (breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
-              if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
-              stop = true
-            }
-            return
-          }
+           if (bodyIsHtml) {
+             markProxyTransportFail()
+             scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg })
+             summary.html++
+             summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
+             if (!quiet) console.warn(`  fetch failed: ${msg} (html)`)
+             if (breakerEnabled) consecutiveFails++
+             if (breakerEnabled && breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
+               if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
+               stop = true
+             }
+             return
+           }
           if (err.status === 400 || err.status === 404) {
             scanDb.markPermanent(uid, { game: args.game, status: err.status, error: msg })
             summary.permanent++
@@ -376,49 +678,49 @@ export async function cmdSampleCollect(argv) {
           }
           // 429: backoff more aggressively.
            if (err.status === 429) {
-             scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg, retryAfterMs: Math.max(5 * 60_000, args.delayMs * 10) })
-             summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
-             if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
-             // With proxies, 429 is often proxy/IP-specific. Disable this proxy and continue.
-             if (proxyStates.length && dispatcher && bucket >= 0 && bucket < proxyStates.length) {
-               proxyStates[bucket].disabled = true
-               console.warn(`  proxy disabled due to 429: ${bucket + 1}/${proxyStates.length} url=${proxyStates[bucket].url}`)
-               if (workerState) workerState.proxyIdx = (bucket + 1) % proxyStates.length
-               return
-             }
-             // Without proxy, 429 usually means upstream is rate-limiting us: consider stopping early.
-             consecutiveFails++
-             if (breakerOn429) {
-               if (!quiet) console.warn(`  circuit breaker: break on 429`)
-               stop = true
-             }
-             return
+              scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg, retryAfterMs: Math.max(5 * 60_000, args.delayMs * 10) })
+              summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
+              if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
+              // With proxies, 429 is often proxy/IP-specific. Disable this proxy and continue.
+              if (proxyStates.length && dispatcher && bucket >= 0 && bucket < proxyStates.length) {
+                proxyStates[bucket].disabled = true
+                console.warn(`  proxy disabled due to 429: ${bucket + 1}/${proxyStates.length} url=${proxyStates[bucket].url}`)
+                if (workerState) workerState.proxyIdx = (bucket + 1) % proxyStates.length
+                return
+              }
+              // Without proxy, 429 usually means upstream is rate-limiting us: consider stopping early.
+              if (breakerEnabled) consecutiveFails++
+              if (breakerEnabled && breakerOn429) {
+                if (!quiet) console.warn(`  circuit breaker: break on 429`)
+                stop = true
+              }
+              return
+            }
+           // 424/500/503 etc: transient, record and continue.
+           scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg })
+           summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
+           if (!quiet) console.warn(`  fetch failed: ${msg}`)
+           if (breakerEnabled) consecutiveFails++
+           if (breakerEnabled && breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
+             if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
+             stop = true
            }
-          // 424/500/503 etc: transient, record and continue.
-          scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg })
-          summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
-          if (!quiet) console.warn(`  fetch failed: ${msg}`)
-          consecutiveFails++
-          if (breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
-            if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
-            stop = true
-          }
-          return
-        }
+           return
+         }
 
-        const msg = err?.stack || err?.message || String(err)
-        // Transport errors are very likely proxy issues.
-        markProxyTransportFail()
-        scanDb.recordFailure(uid, { game: args.game, status: null, error: msg })
-        summary.transport++
-        if (!quiet) console.warn(`  fetch failed: ${msg}`)
-        consecutiveFails++
-        if (breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
-          if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
-          stop = true
-        }
-        return
-      }
+         const msg = err?.stack || err?.message || String(err)
+         // Transport errors are very likely proxy issues.
+         markProxyTransportFail()
+         scanDb.recordFailure(uid, { game: args.game, status: null, error: msg })
+         summary.transport++
+         if (!quiet) console.warn(`  fetch failed: ${msg}`)
+         if (breakerEnabled) consecutiveFails++
+         if (breakerEnabled && breakerMaxConsecutiveFails > 0 && consecutiveFails >= breakerMaxConsecutiveFails) {
+           if (!quiet) console.warn(`  circuit breaker: maxConsecutiveFails=${breakerMaxConsecutiveFails}`)
+           stop = true
+         }
+         return
+       }
 
       if (args.saveRaw) {
         const rawPath = path.join(paths.rawDir(args.game), `${uid}.json`)
