@@ -65,11 +65,19 @@ export function openProxyDb({ dbPath } = {}) {
     CREATE INDEX IF NOT EXISTS idx_proxy_v2ray_attempt_ok ON proxy_v2ray_attempt(ok);
   `)
 
-  const stmtInsertNode = db.prepare(`
-    INSERT OR IGNORE INTO proxy_node (
+  const stmtExistsNode = db.prepare(`SELECT 1 AS ok FROM proxy_node WHERE node_key = ?`)
+  const stmtUpsertNode = db.prepare(`
+    INSERT INTO proxy_node (
       node_key, created_at, updated_at, node_type, node_tag, node_host, node_port, node_gz
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(node_key) DO UPDATE SET
+      updated_at = excluded.updated_at,
+      node_type = excluded.node_type,
+      node_tag = excluded.node_tag,
+      node_host = excluded.node_host,
+      node_port = excluded.node_port,
+      node_gz = excluded.node_gz
   `)
   const stmtCountNodes = db.prepare(`SELECT COUNT(1) AS cnt FROM proxy_node`)
   const stmtListNodes = db.prepare(`
@@ -89,7 +97,8 @@ export function openProxyDb({ dbPath } = {}) {
     const nodePort = node?.port != null ? Number(node.port) : null
     const nodeGz = gzipBuffer(JSON.stringify(node || null))
 
-    const info = stmtInsertNode.run(
+    const existed = Boolean(stmtExistsNode.get(k)?.ok)
+    const info = stmtUpsertNode.run(
       k,
       createdAt,
       createdAt,
@@ -99,8 +108,8 @@ export function openProxyDb({ dbPath } = {}) {
       Number.isFinite(nodePort) ? nodePort : null,
       nodeGz
     )
-    const inserted = Number(info?.changes || 0) > 0
-    return { ok: true, inserted }
+    const changed = Number(info?.changes || 0) > 0
+    return { ok: true, inserted: !existed && changed, updated: existed && changed }
   }
 
   const countNodes = () => {

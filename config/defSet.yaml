@@ -65,11 +65,11 @@ samples:
       uidStart: null
       uidEnd: null
 
-    maxCount: 200000
+    maxCount: 20000
     # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
-    concurrency: 200
+    concurrency: 20
     # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
-    retryFirst: 5
+    retryFirst: 1
     # 有代理时：这是“每个代理桶”的请求间隔
     delayMs: 20000
     # 无代理/无可用节点时：全局限速（跨 gs/sr/zzz、跨进程），避免直连触发 429
@@ -131,6 +131,10 @@ proxy:
   enabled: false
   # enabled=true 且 required=true 时，如果没有可用节点会直接报错退出
   required: false
+  # 代理内核：v2ray（当前默认）/ mihomo（Clash Meta）/ auto（按节点类型自动选择）
+  core: auto
+  # 是否把代理配置落地到项目目录（data/proxy）。默认关闭以避免大量配置文件造成卡顿。
+  keepConfigFiles: false
   # 代理节点启动/测活记录存储（SQLite）
   db:
     # 留空则默认：./data/proxy.sqlite
@@ -141,9 +145,11 @@ proxy:
     binDir: ./bin/v2ray
     logLevel: warning
     basePort: 17890
-    # 是否把 v2ray 配置落地到项目目录（data/proxy）。默认关闭以避免大量 json 造成卡顿。
-    # 关闭时会写到系统临时目录，并在进程退出时尽量清理。
-    keepConfigFiles: false
+  mihomo:
+    # Mihomo（Clash Meta）下载地址：留空或 auto 表示从 GitHub latest 自动解析 Windows amd64 zip
+    downloadUrl: auto
+    binDir: ./bin/mihomo
+    logLevel: warning
   subscription:
     # 订阅链接列表（支持：base64/vmess/vless/trojan/ss、以及 Clash YAML 的 proxies:）
     urls: []
@@ -155,8 +161,8 @@ proxy:
     cacheDir: ./data/proxy/subscription-cache
     # 缓存 TTL（秒）；0 表示不限制（只要文件存在就可用）
     cacheTtlSec: 0
-    # 最多保留多少个可用节点作为代理池
-    maxNodes: 3
+    # 最多保留多少个可用节点作为代理池（可填 auto 自动对齐 samples.enka.concurrency）
+    maxNodes: 30
     # 最多探测多少个节点（从订阅里按顺序取前 N 个探测，直到凑满 maxNodes）
     probeCount: 20
     # 探测轮数：当订阅前缀节点大面积不可用时，使用“spread”策略会把探测名额分布到全列表。

@@ -14,12 +14,21 @@ const USER_CONFIG_PATH = path.join(CONFIG_DIR, "config.yaml")
 const LEGACY_DEFAULT_CONFIG_PATH = path.join(CONFIG_DIR, "defSet.json")
 const LEGACY_USER_CONFIG_PATH = path.join(CONFIG_DIR, "config.json")
 
+const warnedParseFiles = new Set()
+
 function readYamlSafe(filePath) {
   try {
     if (!fs.existsSync(filePath)) return null
     const txt = fs.readFileSync(filePath, "utf8")
-    return yaml.load(txt)
-  } catch {
+    const obj = yaml.load(txt)
+    if (!obj || typeof obj !== "object") return null
+    return obj
+  } catch (e) {
+    const key = String(filePath || "")
+    if (key && !warnedParseFiles.has(key)) {
+      warnedParseFiles.add(key)
+      console.warn(`[config] parse failed: ${filePath} (${e?.message || String(e)})`)
+    }
     return null
   }
 }

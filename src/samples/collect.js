@@ -165,10 +165,24 @@ export async function cmdSampleCollect(argv) {
   const quiet = Boolean(args.quiet || envBool("QUIET", false))
   const enkaTimeoutMs = Math.max(0, envNum("ENKA_TIMEOUT_MS", Number(cfg?.samples?.enka?.timeoutMs || 0)))
 
-  const concurrency = Math.max(1, Math.min(50, Number(args.concurrency) || 1))
-
   const proxyUrls = parseProxyUrls()
   const proxyDispatchers = proxyUrls.map((u) => new ProxyAgent(u))
+  // Without proxy we enforce a strict cross-process rate limit (sqlite-backed).
+  // Using concurrency>1 in this mode does not increase throughput but can create a long
+  // "silent" wait queue after restarts (many workers reserve future slots immediately).
+  const requestedConcurrency = Math.max(1, Math.min(50, Number(args.concurrency) || 1))
+  let concurrency = requestedConcurrency
+  if (proxyDispatchers.length === 0 && noProxyDelayMs > 0) {
+    concurrency = 1
+  } else if (proxyDispatchers.length > 0) {
+    // More workers than proxies won't increase throughput, but can increase 429/overhead.
+    concurrency = Math.max(1, Math.min(requestedConcurrency, proxyDispatchers.length))
+  }
+  if (!quiet && requestedConcurrency !== concurrency) {
+    const reason = proxyDispatchers.length > 0 ? "proxyCount" : "no-proxy"
+    console.log(`[samples] forcing concurrency=${concurrency} (requested=${requestedConcurrency}, reason=${reason})`)
+  }
+
   const proxyStates = proxyDispatchers.map((dispatcher, i) => ({
     i,
     url: proxyUrls[i],
@@ -282,6 +296,9 @@ export async function cmdSampleCollect(argv) {
       if (!dispatcher && noProxyDelayMs > 0 && typeof scanDb.reserveRateLimit === "function") {
         const intervalMs = Math.max(0, Number(args.delayMs) || 0, noProxyDelayMs)
         const { waitMs } = scanDb.reserveRateLimit("enka:no-proxy:global", intervalMs)
+        if (!quiet && waitMs > 0) {
+          console.log(`  throttle: waitMs=${waitMs} (global no-proxy limit intervalMs=${intervalMs})`)
+        }
         if (waitMs > 0) await sleep(waitMs)
       } else {
         await waitTurn(bucket)
@@ -358,17 +375,25 @@ export async function cmdSampleCollect(argv) {
             return
           }
           // 429: backoff more aggressively.
-          if (err.status === 429) {
-            scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg, retryAfterMs: Math.max(5 * 60_000, args.delayMs * 10) })
-            summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
-            if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
-            consecutiveFails++
-            if (breakerOn429) {
-              if (!quiet) console.warn(`  circuit breaker: break on 429`)
-              stop = true
-            }
-            return
-          }
+           if (err.status === 429) {
+             scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg, retryAfterMs: Math.max(5 * 60_000, args.delayMs * 10) })
+             summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1
+             if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
+             // With proxies, 429 is often proxy/IP-specific. Disable this proxy and continue.
+             if (proxyStates.length && dispatcher && bucket >= 0 && bucket < proxyStates.length) {
+               proxyStates[bucket].disabled = true
+               console.warn(`  proxy disabled due to 429: ${bucket + 1}/${proxyStates.length} url=${proxyStates[bucket].url}`)
+               if (workerState) workerState.proxyIdx = (bucket + 1) % proxyStates.length
+               return
+             }
+             // Without proxy, 429 usually means upstream is rate-limiting us: consider stopping early.
+             consecutiveFails++
+             if (breakerOn429) {
+               if (!quiet) console.warn(`  circuit breaker: break on 429`)
+               stop = true
+             }
+             return
+           }
           // 424/500/503 etc: transient, record and continue.
           scanDb.recordFailure(uid, { game: args.game, status: err.status, error: msg })
           summary.byStatus[String(err.status)] = (summary.byStatus[String(err.status)] || 0) + 1

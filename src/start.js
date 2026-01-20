@@ -43,6 +43,12 @@ function envList(name, fallback = []) {
   return toList(raw)
 }
 
+function toFiniteNumber(v) {
+  if (v == null || v === "") return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 function getEnkaUidSelector(cfg, game) {
   const enkaCfg = cfg?.samples?.enka || {}
   const gameCfg = enkaCfg?.[game] || {}
@@ -53,10 +59,12 @@ function getEnkaUidSelector(cfg, game) {
   let uids = envList("ENKA_UIDS", gameCfg?.uids ?? enkaCfg?.uids ?? [])
   uids = envList(`ENKA_UIDS_${upper}`, uids)
 
-  let uidStart = envNum("ENKA_UID_START", gameCfg?.uidStart ?? enkaCfg?.uidStart ?? null)
+  const cfgUidStart = toFiniteNumber(gameCfg?.uidStart ?? enkaCfg?.uidStart ?? null)
+  let uidStart = envNum("ENKA_UID_START", cfgUidStart)
   uidStart = envNum(`ENKA_UID_START_${upper}`, uidStart)
 
-  let uidEnd = envNum("ENKA_UID_END", gameCfg?.uidEnd ?? enkaCfg?.uidEnd ?? null)
+  const cfgUidEnd = toFiniteNumber(gameCfg?.uidEnd ?? enkaCfg?.uidEnd ?? null)
+  let uidEnd = envNum("ENKA_UID_END", cfgUidEnd)
   uidEnd = envNum(`ENKA_UID_END_${upper}`, uidEnd)
 
   let countCfg = envNum("ENKA_COUNT", null)

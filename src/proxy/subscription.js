@@ -352,7 +352,8 @@ function parseClashYaml(text) {
         sni: String(p?.servername || p?.sni || "").trim(),
         allowInsecure,
         wsHost: String(p?.["ws-opts"]?.headers?.Host || "").trim(),
-        wsPath: String(p?.["ws-opts"]?.path || "").trim()
+        wsPath: String(p?.["ws-opts"]?.path || "").trim(),
+        clash: p
       })
       continue
     }
@@ -372,7 +373,8 @@ function parseClashYaml(text) {
         allowInsecure,
         wsHost: String(p?.["ws-opts"]?.headers?.Host || "").trim(),
         wsPath: String(p?.["ws-opts"]?.path || "").trim(),
-        grpcServiceName: String(p?.["grpc-opts"]?.["grpc-service-name"] || "").trim()
+        grpcServiceName: String(p?.["grpc-opts"]?.["grpc-service-name"] || "").trim(),
+        clash: p
       })
       continue
     }
@@ -390,7 +392,8 @@ function parseClashYaml(text) {
         allowInsecure,
         wsHost: String(p?.["ws-opts"]?.headers?.Host || "").trim(),
         wsPath: String(p?.["ws-opts"]?.path || "").trim(),
-        grpcServiceName: String(p?.["grpc-opts"]?.["grpc-service-name"] || "").trim()
+        grpcServiceName: String(p?.["grpc-opts"]?.["grpc-service-name"] || "").trim(),
+        clash: p
       })
       continue
     }
@@ -402,7 +405,40 @@ function parseClashYaml(text) {
         host,
         port,
         method: String(p?.cipher || p?.method || "").trim(),
-        password: String(p?.password || "").trim()
+        password: String(p?.password || "").trim(),
+        clash: p
+      })
+      continue
+    }
+
+    // Advanced protocols: keep as canonical w/ clash passthrough (for mihomo/sing-box adapters).
+    if (type === "hysteria2" || type === "hy2") {
+      out.push({
+        type: "hysteria2",
+        tag: name || `hy2:${host}:${port}`,
+        host,
+        port,
+        password: String(p?.password || p?.auth || p?.["auth-str"] || "").trim(),
+        tls: p?.tls ? "tls" : "",
+        sni: String(p?.sni || p?.servername || "").trim(),
+        allowInsecure,
+        clash: p
+      })
+      continue
+    }
+
+    if (type === "tuic") {
+      out.push({
+        type: "tuic",
+        tag: name || `tuic:${host}:${port}`,
+        host,
+        port,
+        id: String(p?.uuid || "").trim(),
+        password: String(p?.password || "").trim(),
+        tls: p?.tls ? "tls" : "",
+        sni: String(p?.sni || p?.servername || "").trim(),
+        allowInsecure,
+        clash: p
       })
       continue
     }

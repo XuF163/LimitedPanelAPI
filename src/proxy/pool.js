@@ -9,6 +9,8 @@ import { ensureDir } from "../utils/fs.js"
 import { openProxyDb } from "../db/proxy.js"
 import { ensureV2rayCore } from "./v2ray-core.js"
 import { buildV2rayHttpProxyConfig } from "./v2ray.js"
+import { ensureMihomoCore } from "./mihomo-core.js"
+import { startMihomoHttpProxy } from "./mihomo.js"
 import { loadSubscriptionNodes } from "./subscription.js"
 
 function toBool(v, fallback = false) {
@@ -127,23 +129,54 @@ export async function ensureProxyPool(cfg = {}) {
   if (!enabled) return { enabled: false, proxyUrls: [], close: async () => {} }
 
   const required = toBool(process.env.PROXY_REQUIRED, cfg?.proxy?.required ?? false)
-  const keepConfigFiles = toBool(process.env.PROXY_KEEP_CONFIG_FILES, cfg?.proxy?.v2ray?.keepConfigFiles ?? false)
+  const corePref = String(process.env.PROXY_CORE || cfg?.proxy?.core || "v2ray").trim().toLowerCase()
+  const keepConfigFiles = toBool(
+    process.env.PROXY_KEEP_CONFIG_FILES,
+    cfg?.proxy?.keepConfigFiles ?? cfg?.proxy?.v2ray?.keepConfigFiles ?? cfg?.proxy?.mihomo?.keepConfigFiles ?? false
+  )
 
-  const downloadUrl =
+  const v2rayDownloadUrl =
     process.env.V2RAY_DOWNLOAD_URL ||
     cfg?.proxy?.v2ray?.downloadUrl ||
     "https://github.com/v2fly/v2ray-core/releases/download/v5.44.1/v2ray-windows-64.zip"
 
-  const binDir = process.env.V2RAY_BIN_DIR || cfg?.proxy?.v2ray?.binDir || "./bin/v2ray"
-  const logLevel = process.env.V2RAY_LOG_LEVEL || cfg?.proxy?.v2ray?.logLevel || "warning"
-  const basePort = toInt(process.env.V2RAY_BASE_PORT, cfg?.proxy?.v2ray?.basePort ?? 17890)
-  const poolSize = Math.max(1, Math.min(50, toInt(process.env.PROXY_POOL_SIZE, cfg?.proxy?.subscription?.maxNodes ?? 3)))
+  const v2rayBinDir = process.env.V2RAY_BIN_DIR || cfg?.proxy?.v2ray?.binDir || "./bin/v2ray"
+  const v2rayLogLevel = process.env.V2RAY_LOG_LEVEL || cfg?.proxy?.v2ray?.logLevel || "warning"
+
+  const mihomoDownloadUrl = process.env.MIHOMO_DOWNLOAD_URL || cfg?.proxy?.mihomo?.downloadUrl || "auto"
+  const mihomoBinDir = process.env.MIHOMO_BIN_DIR || cfg?.proxy?.mihomo?.binDir || "./bin/mihomo"
+  const mihomoLogLevel = process.env.MIHOMO_LOG_LEVEL || cfg?.proxy?.mihomo?.logLevel || "warning"
+
+  const basePort = toInt(process.env.PROXY_BASE_PORT || process.env.V2RAY_BASE_PORT, cfg?.proxy?.basePort ?? cfg?.proxy?.v2ray?.basePort ?? 17890)
+  const desiredConcurrency = Math.max(0, toInt(process.env.ENKA_CONCURRENCY, cfg?.samples?.enka?.concurrency ?? 0))
+  const cfgMaxNodesRaw = cfg?.proxy?.subscription?.maxNodes
+  const cfgMaxNodesStr = String(cfgMaxNodesRaw ?? "").trim().toLowerCase()
+  const isAutoPool = cfgMaxNodesStr === "auto" || Number(cfgMaxNodesRaw) === 0
+  const poolSizeRaw = isAutoPool && desiredConcurrency > 0
+    ? desiredConcurrency
+    : toInt(process.env.PROXY_POOL_SIZE, cfgMaxNodesRaw ?? 3)
+  const poolSize = Math.max(1, Math.min(50, poolSizeRaw))
+  if (!isAutoPool && desiredConcurrency > 0 && poolSize < desiredConcurrency) {
+    console.warn(
+      `[proxy] poolSize=${poolSize} < samples.enka.concurrency=${desiredConcurrency}; ` +
+      `consider set proxy.subscription.maxNodes=auto or a larger number to meet throughput requirements.`
+    )
+  }
   const probeCount = Math.max(poolSize, Math.min(500, toInt(process.env.PROXY_PROBE_COUNT, cfg?.proxy?.subscription?.probeCount ?? 50)))
   const probeRounds = Math.max(1, Math.min(10, toInt(process.env.PROXY_PROBE_ROUNDS, cfg?.proxy?.subscription?.probeRounds ?? 3)))
+  const probeMaxTotalCfg = toInt(process.env.PROXY_PROBE_MAX_TOTAL, cfg?.proxy?.subscription?.probeMaxTotal ?? 0)
+  const probeMaxTotalDefault = Math.max(probeCount * probeRounds, poolSize * 50)
+  const probeMaxTotal = Math.max(0, Math.min(5000, probeMaxTotalCfg > 0 ? probeMaxTotalCfg : probeMaxTotalDefault))
   // Use an API endpoint that returns JSON (even for 4xx) to avoid false positives from HTML landing/WAF pages.
   const testUrl = process.env.PROXY_TEST_URL || cfg?.proxy?.subscription?.testUrl || "https://enka.network/api/uid/100000001"
   const testTimeoutMs = Math.max(1000, toInt(process.env.PROXY_TEST_TIMEOUT_MS, cfg?.proxy?.subscription?.testTimeoutMs ?? 8000))
-  const startConcurrency = Math.max(1, Math.min(20, toInt(process.env.PROXY_START_CONCURRENCY, cfg?.proxy?.subscription?.startConcurrency ?? 6)))
+  const startConcurrencyCfg = toInt(process.env.PROXY_START_CONCURRENCY, cfg?.proxy?.subscription?.startConcurrency ?? 6)
+  const startConcurrencyEnvSet = process.env.PROXY_START_CONCURRENCY != null && String(process.env.PROXY_START_CONCURRENCY).trim() !== ""
+  // If user didn't override and they want a big pool, scale up probing concurrency to avoid "stuck" feeling.
+  const startConcurrencyDefault = (poolSize >= 10 && !startConcurrencyEnvSet && Number(startConcurrencyCfg) === 6)
+    ? Math.min(20, Math.max(6, Math.ceil(poolSize / 2)))
+    : startConcurrencyCfg
+  const startConcurrency = Math.max(1, Math.min(20, startConcurrencyDefault))
   const startupMs = Math.max(200, Math.min(5000, toInt(process.env.PROXY_STARTUP_MS, cfg?.proxy?.subscription?.startupMs ?? 700)))
   const testHeaders = {
     // enka.network returns HTML 403 for empty/unknown UA; use same style as our enka fetchers.
@@ -176,8 +209,6 @@ export async function ensureProxyPool(cfg = {}) {
   if (!keepConfigFiles) {
     await cleanupLegacyProxyJsonFiles().catch(() => {})
   }
-
-  const { exePath, binDir: resolvedBin } = await ensureV2rayCore({ binDir, downloadUrl })
 
   let nodes
   if (!subUrls.length) {
@@ -236,13 +267,125 @@ export async function ensureProxyPool(cfg = {}) {
     }
   }
 
-  const ports = nextPorts(basePort, Math.min(2000, probeCount * probeRounds + 10))
+  const normalizeType = (n) => String(n?.type || "").trim().toLowerCase()
+  const hasClashReality = (n) => {
+    const c = n?.clash
+    if (!c || typeof c !== "object") return false
+    // Common keys used by Clash/Mihomo for Reality:
+    // - reality-opts / reality-opts.public-key / reality-opts.short-id
+    return Boolean(c?.["reality-opts"] || c?.realityOpts || c?.reality || c?.pbk || c?.["public-key"])
+  }
+  const needsMihomoForNode = (n) => {
+    const t = normalizeType(n)
+    if (["hysteria2", "hy2", "tuic", "hysteria", "tuicv5"].includes(t)) return true
+    const tls = String(n?.tls || "").trim().toLowerCase()
+    if (tls === "reality") return true
+    if (hasClashReality(n)) return true
+    return false
+  }
+  const supportsV2rayNode = (n) => {
+    const t = normalizeType(n)
+    if (!["vmess", "vless", "trojan", "ss"].includes(t)) return false
+    // v2ray builder does not support Reality yet.
+    if (t === "vless" && needsMihomoForNode(n)) return false
+    return true
+  }
+  const coreForNode = (n) => {
+    if (corePref === "mihomo") return "mihomo"
+    if (corePref === "v2ray") return "v2ray"
+    // auto
+    if (needsMihomoForNode(n)) return "mihomo"
+    if (supportsV2rayNode(n)) return "v2ray"
+    return "mihomo"
+  }
+
+  let v2rayCore = null
+  let mihomoCore = null
+  const wantV2ray = nodes.some((n) => coreForNode(n) === "v2ray")
+  const wantMihomo = nodes.some((n) => coreForNode(n) === "mihomo")
+
+  if (wantV2ray) {
+    try {
+      v2rayCore = await ensureV2rayCore({ binDir: v2rayBinDir, downloadUrl: v2rayDownloadUrl })
+    } catch (e) {
+      const msg = e?.message || String(e)
+      if (required || corePref === "v2ray") throw e
+      console.warn(`[proxy] v2ray-core unavailable; skipping v2ray nodes: ${msg}`)
+      v2rayCore = null
+    }
+  }
+  if (wantMihomo) {
+    try {
+      mihomoCore = await ensureMihomoCore({ binDir: mihomoBinDir, downloadUrl: mihomoDownloadUrl })
+    } catch (e) {
+      const msg = e?.message || String(e)
+      if (required || corePref === "mihomo") throw e
+      console.warn(`[proxy] mihomo unavailable; skipping mihomo-only nodes: ${msg}`)
+      mihomoCore = null
+    }
+  }
+
+  const maxProbe = Math.max(1, Math.min(nodes.length, probeMaxTotal || nodes.length))
+  const ports = nextPorts(basePort, Math.min(20000, maxProbe + 50))
+
   const procs = []
   const proxyUrls = []
   const tempFiles = new Set()
+  const tempDirs = new Set()
 
   const startOne = async (node, port) => {
-    const cfgObj = buildV2rayHttpProxyConfig(node, { listen: "127.0.0.1", port, logLevel })
+    const core = coreForNode(node)
+    const proxyUrl = `http://127.0.0.1:${port}`
+    let attemptId = null
+    let lastTest = null
+
+    if (core === "mihomo") {
+      if (!mihomoCore?.exePath) {
+        attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: { core }, testUrl })
+        proxyDb?.finishAttempt?.(attemptId, { ok: false, error: "mihomo core not available" })
+        return { ok: false, proxyUrl, test: { ok: false, error: "mihomo core not available" } }
+      }
+      const started = await startMihomoHttpProxy({
+        exePath: mihomoCore.exePath,
+        node,
+        port,
+        logLevel: mihomoLogLevel,
+        keepConfigFiles,
+        runDir: path.resolve(".")
+      })
+      attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: { core, ...started.config }, testUrl })
+      if (!keepConfigFiles) {
+        tempFiles.add(started.cfgPath)
+        tempDirs.add(started.homeDir)
+      }
+      await new Promise((r) => setTimeout(r, startupMs))
+      const test = await testProxy(proxyUrl, { testUrl, timeoutMs: testTimeoutMs, headers: testHeaders })
+      lastTest = test
+      if (!test.ok) {
+        await started.cleanup().catch(() => {})
+        proxyDb?.finishAttempt?.(attemptId, { ok: false, status: test.status, ms: test.ms, error: test.error || "mihomo health-check failed" })
+        return { ok: false, proxyUrl, test }
+      }
+      proxyDb?.finishAttempt?.(attemptId, { ok: true, status: test.status, ms: test.ms })
+      return {
+        ok: true,
+        child: started.child,
+        cfgPath: started.cfgPath,
+        proxyUrl,
+        node,
+        test,
+        cleanup: started.cleanup
+      }
+    }
+
+    // v2ray-core
+    if (!v2rayCore?.exePath) {
+      attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: { core }, testUrl })
+      proxyDb?.finishAttempt?.(attemptId, { ok: false, error: "v2ray core not available" })
+      return { ok: false, proxyUrl, test: { ok: false, error: "v2ray core not available" } }
+    }
+    const cfgObj = buildV2rayHttpProxyConfig(node, { listen: "127.0.0.1", port, logLevel: v2rayLogLevel })
+    attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: { core, ...cfgObj }, testUrl })
     const runDir = path.resolve(".")
     const cfgDir = keepConfigFiles
       ? path.join(runDir, "data", "proxy")
@@ -254,10 +397,6 @@ export async function ensureProxyPool(cfg = {}) {
     await fsp.writeFile(cfgPath, JSON.stringify(cfgObj, null, 2), "utf8")
     if (!keepConfigFiles) tempFiles.add(cfgPath)
 
-    const proxyUrl = `http://127.0.0.1:${port}`
-    const attemptId = proxyDb?.insertAttempt?.({ localPort: port, node, config: cfgObj, testUrl })
-    let lastTest = null
-
     // v2ray-core CLI has differed across major versions; try a few common variants.
     const argVariants = [
       ["run", "-config", cfgPath],
@@ -267,16 +406,13 @@ export async function ensureProxyPool(cfg = {}) {
     ]
 
     for (const args of argVariants) {
-      const child = spawn(exePath, args, {
-        cwd: resolvedBin,
+      const child = spawn(v2rayCore.exePath, args, {
+        cwd: v2rayCore.binDir,
         stdio: ["ignore", "ignore", "ignore"],
         windowsHide: true
       })
-      // Do not keep Node event loop alive just because proxy processes are running.
-      // We'll still kill them via returned close() or process-exit cleanup.
       child.unref()
 
-      // Wait a bit, then test.
       await new Promise((r) => setTimeout(r, startupMs))
       const test = await testProxy(proxyUrl, { testUrl, timeoutMs: testTimeoutMs, headers: testHeaders })
       lastTest = test
@@ -286,7 +422,14 @@ export async function ensureProxyPool(cfg = {}) {
       }
 
       proxyDb?.finishAttempt?.(attemptId, { ok: true, status: test.status, ms: test.ms })
-      return { ok: true, child, cfgPath, proxyUrl, node, test }
+      const cleanup = async () => {
+        try { child.kill() } catch {}
+        if (!keepConfigFiles) {
+          try { await fsp.unlink(cfgPath) } catch {}
+          tempFiles.delete(cfgPath)
+        }
+      }
+      return { ok: true, child, cfgPath, proxyUrl, node, test, cleanup }
     }
 
     proxyDb?.finishAttempt?.(attemptId, {
@@ -299,25 +442,74 @@ export async function ensureProxyPool(cfg = {}) {
       try { await fsp.unlink(cfgPath) } catch {}
       tempFiles.delete(cfgPath)
     }
-    return { ok: false, proxyUrl, test: { ok: false, status: null, ms: 0, error: "v2ray core started but health-check failed" } }
+    return { ok: false, proxyUrl, test: lastTest || { ok: false, status: null, ms: 0, error: "v2ray core started but health-check failed" } }
   }
 
   const pickStrategy = toPickStrategy(process.env.PROXY_PICK_STRATEGY, cfg?.proxy?.subscription?.pickStrategy ?? "spread")
   const candidates = []
   const pickedKeys = new Set()
-  for (let round = 0; round < probeRounds; round++) {
-    const offset = round % Math.max(1, nodes.length)
-    const roundNodes = pickCandidates(nodes, probeCount, { strategy: pickStrategy, offset })
+  const nTotal = Math.max(1, nodes.length)
+  const targetCandidates = Math.min(nTotal, maxProbe)
+  // Build candidates progressively. The default probeCount/probeRounds are often too small
+  // for real-world subscriptions where only a subset is usable for Enka JSON checks.
+  // We keep sampling "spread" rounds until we have enough candidates or we exhaust the list.
+  const roundCap = Math.max(probeRounds, Math.min(200, Math.ceil(targetCandidates / Math.max(1, probeCount))))
+  for (let round = 0; round < roundCap && candidates.length < targetCandidates; round++) {
+    const offset = round % nTotal
+    const roundNodes = pickCandidates(nodes, Math.min(probeCount, nTotal), { strategy: pickStrategy, offset })
     for (const n of roundNodes) {
       const k = nodeKey(n)
       if (!k || pickedKeys.has(k)) continue
       pickedKeys.add(k)
       candidates.push(n)
+      if (candidates.length >= targetCandidates) break
     }
   }
+  if (candidates.length < targetCandidates && nodes.length > candidates.length) {
+    // Fallback: fill from head if spread sampling couldn't reach all unique nodes.
+    for (const n of nodes) {
+      const k = nodeKey(n)
+      if (!k || pickedKeys.has(k)) continue
+      pickedKeys.add(k)
+      candidates.push(n)
+      if (candidates.length >= targetCandidates) break
+    }
+  }
+  console.log(`[proxy] probing: candidates=${candidates.length}/${nodes.length} targetPool=${poolSize} core=${corePref}`)
   let nodeIdx = 0
   let portIdx = 0
   let stop = false
+  let tried = 0
+  let active = 0
+  let lastFinishAt = Date.now()
+  let lastProgressAt = 0
+  let lastProgressStr = ""
+  let lastFail = ""
+  const progressEveryMs = Math.max(1000, Math.min(60_000, toInt(process.env.PROXY_PROGRESS_MS, cfg?.proxy?.subscription?.progressMs ?? 5000)))
+
+  const logProgress = (force = false) => {
+    const now = Date.now()
+    if (!force && now - lastProgressAt < progressEveryMs) return
+    lastProgressAt = now
+    const idleSec = Math.max(0, Math.round((now - lastFinishAt) / 1000))
+    const msg =
+      `[proxy] probing progress: ok=${proxyUrls.length}/${poolSize} ` +
+      `tried=${tried}/${candidates.length} ` +
+      `assigned=${Math.min(nodeIdx, candidates.length)}/${candidates.length} ` +
+      `active=${active} ` +
+      `idleSec=${idleSec} ` +
+      `${lastFail ? `lastFail=${lastFail}` : ""}`.trim()
+    if (!force && msg === lastProgressStr) return
+    lastProgressStr = msg
+    console.log(msg)
+  }
+
+  // Ensure we keep printing progress even if a worker gets stuck in startOne().
+  const progressTimer = setInterval(() => {
+    logProgress(false)
+  }, progressEveryMs)
+  progressTimer.unref?.()
+  logProgress(true)
 
   const worker = async () => {
     while (!stop) {
@@ -331,42 +523,69 @@ export async function ensureProxyPool(cfg = {}) {
       const node = candidates[cur]
       const port = ports[portIdx++]
       try {
+        active++
         const res = await startOne(node, port)
-        if (!res.ok) continue
+        active--
+        tried++
+        lastFinishAt = Date.now()
+        logProgress(false)
+        if (!res.ok) {
+          lastFail = String(res?.test?.error || (res?.test?.status != null ? `status=${res.test.status}` : "unusable")).slice(0, 120)
+          continue
+        }
 
         // Keep as many usable nodes as possible (up to poolSize); drop the rest.
         if (proxyUrls.length >= poolSize) {
-          try { res.child.kill() } catch {}
-          if (!keepConfigFiles) {
-            try { await fsp.unlink(res.cfgPath) } catch {}
-            tempFiles.delete(res.cfgPath)
-          }
+          try {
+            if (typeof res.cleanup === "function") await res.cleanup()
+            else res.child?.kill?.()
+          } catch {}
           stop = true
           return
         }
 
-        procs.push({ child: res.child, cfgPath: res.cfgPath, proxyUrl: res.proxyUrl, node: res.node, test: res.test })
+        procs.push({
+          child: res.child,
+          cfgPath: res.cfgPath,
+          proxyUrl: res.proxyUrl,
+          node: res.node,
+          test: res.test,
+          cleanup: res.cleanup
+        })
         proxyUrls.push(res.proxyUrl)
         console.log(`[proxy] ok ${res.proxyUrl} ${res.node.type} ${res.node.tag} (${res.test.ms}ms status=${res.test.status})`)
+        logProgress(true)
         if (proxyUrls.length >= poolSize) {
           stop = true
           return
         }
       } catch (e) {
+        active = Math.max(0, active - 1)
+        lastFinishAt = Date.now()
+        lastFail = String(e?.message || e).slice(0, 120)
         console.warn(`[proxy] start failed: ${e?.message || e}`)
+        logProgress(false)
       }
     }
   }
 
   await Promise.all(Array.from({ length: startConcurrency }, () => worker()))
+  clearInterval(progressTimer)
+  logProgress(true)
 
   if (required && proxyUrls.length === 0) {
     // Ensure cleanup before throw.
     for (const p of procs) {
-      try { p.child.kill() } catch {}
+      try {
+        if (typeof p.cleanup === "function") await p.cleanup()
+        else p.child?.kill?.()
+      } catch {}
     }
     for (const cfgPath of tempFiles) {
       try { await fsp.unlink(cfgPath) } catch {}
+    }
+    for (const dir of tempDirs) {
+      try { await fsp.rm(dir, { recursive: true, force: true }) } catch {}
     }
     try { proxyDb?.close?.() } catch {}
     throw new Error(
@@ -377,10 +596,16 @@ export async function ensureProxyPool(cfg = {}) {
 
   const close = async () => {
     for (const p of procs) {
-      try { p.child.kill() } catch {}
+      try {
+        if (typeof p.cleanup === "function") await p.cleanup()
+        else p.child?.kill?.()
+      } catch {}
     }
     for (const cfgPath of tempFiles) {
       try { await fsp.unlink(cfgPath) } catch {}
+    }
+    for (const dir of tempDirs) {
+      try { await fsp.rm(dir, { recursive: true, force: true }) } catch {}
     }
     try { proxyDb?.close?.() } catch {}
   }
