@@ -4,6 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { runCmd } from "../utils/exec.js"
 import { ensureDir } from "../utils/fs.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("代理")
 
 function isWin() {
   return process.platform === "win32"
@@ -126,7 +129,7 @@ export async function ensureMihomoCore({
   const zipPath = path.join(tmpRoot, "mihomo.zip")
   const extractDir = path.join(tmpRoot, "extract")
   try {
-    console.log(`[proxy] downloading mihomo: ${url}`)
+    log.info(`下载 mihomo：${url}`)
     await downloadToFile(url, zipPath)
     await extractZip(zipPath, extractDir)
 
@@ -145,4 +148,3 @@ export async function ensureMihomoCore({
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }) } catch {}
   }
 }
-

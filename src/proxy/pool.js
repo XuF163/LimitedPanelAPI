@@ -4,7 +4,6 @@ import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { createInterface } from "node:readline"
-import { ProxyAgent } from "undici"
 
 import { ensureDir } from "../utils/fs.js"
 import { openProxyDb } from "../db/proxy.js"
@@ -14,6 +13,9 @@ import { ensureMihomoCore } from "./mihomo-core.js"
 import { startMihomoHttpProxy } from "./mihomo.js"
 import { loadSubscriptionNodes } from "./subscription.js"
 import { ensureLimitedPanelRsBinary } from "../rust/runner.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("代理")
 
 function toBool(v, fallback = false) {
   if (v == null || v === "") return fallback
@@ -26,40 +28,6 @@ function toBool(v, fallback = false) {
 function toInt(v, fallback) {
   const n = Number(v)
   return Number.isFinite(n) ? Math.trunc(n) : fallback
-}
-
-function normalizeProberMode(v) {
-  const s = String(v || "").trim().toLowerCase()
-  if ([ "rust", "rs" ].includes(s)) return "rust"
-  if (s === "auto") return "auto"
-  return "js"
-}
-
-async function testProxyJs(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
-  const controller = new AbortController()
-  const tid = setTimeout(() => controller.abort(), timeoutMs)
-  const dispatcher = new ProxyAgent(proxyUrl)
-  const t0 = Date.now()
-  try {
-    const res = await fetch(testUrl, { dispatcher, signal: controller.signal, redirect: "follow", headers })
-    const text = await res.text().catch(() => "")
-    const dt = Date.now() - t0
-    const body = String(text || "").trim()
-    const isHtml = body.startsWith("<")
-    const isJson = body.startsWith("{") || body.startsWith("[")
-
-    // For node usability we require "not HTML" to avoid 429/ban/WAF pages.
-    // We accept common API error statuses (400/403/404/424) as long as body is JSON.
-    const okStatus = [200, 400, 403, 404, 424]
-    const ok = !isHtml && isJson && okStatus.includes(res.status)
-    return { ok, status: res.status, ms: dt }
-  } catch (e) {
-    const dt = Date.now() - t0
-    return { ok: false, status: null, ms: dt, error: e?.message || String(e) }
-  } finally {
-    clearTimeout(tid)
-    dispatcher.close?.()
-  }
 }
 
 let cachedRustBinPromise = null
@@ -129,17 +97,7 @@ async function testProxyRust(proxyUrl, { testUrl, timeoutMs = 8_000, headers } =
 }
 
 async function testProxy(proxyUrl, { testUrl, timeoutMs = 8_000, headers } = {}) {
-  const mode = normalizeProberMode(process.env.PROXY_PROBER || "js")
-  if (mode !== "js") {
-    try {
-      return await testProxyRust(proxyUrl, { testUrl, timeoutMs, headers })
-    } catch (e) {
-      const msg = e?.message || String(e)
-      if (mode === "rust") throw e
-      console.warn(`[proxy] rust prober unavailable; fallback to js: ${msg}`)
-    }
-  }
-  return await testProxyJs(proxyUrl, { testUrl, timeoutMs, headers })
+  return await testProxyRust(proxyUrl, { testUrl, timeoutMs, headers })
 }
 
 function nextPorts(basePort, count) {
@@ -249,10 +207,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
     : toInt(process.env.PROXY_POOL_SIZE, cfgMaxNodesRaw ?? 3)
   const poolSize = Math.max(1, Math.min(50, poolSizeRaw))
   if (!isAutoPool && desiredConcurrency > 0 && poolSize < desiredConcurrency) {
-    console.warn(
-      `[proxy] poolSize=${poolSize} < samples.enka.concurrency=${desiredConcurrency}; ` +
-      `consider set proxy.subscription.maxNodes=auto or a larger number to meet throughput requirements.`
-    )
+    log.warn(`代理池数量偏小：poolSize=${poolSize} < concurrency=${desiredConcurrency}；建议设置 proxy.subscription.maxNodes=auto 或更大值。`)
   }
   const probeCount = Math.max(poolSize, Math.min(500, toInt(process.env.PROXY_PROBE_COUNT, cfg?.proxy?.subscription?.probeCount ?? 50)))
   const probeRounds = Math.max(1, Math.min(10, toInt(process.env.PROXY_PROBE_ROUNDS, cfg?.proxy?.subscription?.probeRounds ?? 3)))
@@ -291,7 +246,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
       const dbPath = process.env.PROXY_DB_PATH || cfg?.proxy?.db?.path
       return openProxyDb({ ...(dbPath ? { dbPath } : {}) })
     } catch (e) {
-      console.warn(`[proxy] open proxy db failed; continue without db: ${e?.message || String(e)}`)
+      log.warn(`打开代理 DB 失败，将继续运行但不落库：${e?.message || String(e)}`)
       return null
     }
   })()
@@ -309,13 +264,13 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
       try { proxyDb?.close?.() } catch {}
       if (required) {
         throw new Error(
-          "proxy enabled but no subscription urls configured (proxy.subscription.urls / PROXY_SUB_URLS) and proxy db is empty"
+          "已启用代理，但未配置订阅(proxy.subscription.urls / PROXY_SUB_URLS)，且代理 DB 为空。"
         )
       }
-      console.warn("[proxy] enabled but no subscription urls configured (and proxy db empty); continue without proxy")
+      log.warn("已启用代理，但未配置订阅且代理 DB 为空；将不使用代理继续。")
       return { enabled: true, proxyUrls: [], close: async () => {} }
     }
-    console.warn(`[proxy] no subscription urls; using ${nodes.length} nodes from proxy db`)
+    log.warn(`未配置订阅，将使用代理 DB 中的节点：${nodes.length}`)
   } else {
     try {
       nodes = await loadSubscriptionNodes(subUrls, {
@@ -324,32 +279,33 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
         cacheTtlSec: subCacheTtlSec,
         useCacheOnFail: subUseCacheOnFail,
         insecureSkipVerify: Boolean(cfg?.proxy?.subscription?.insecureSkipVerify ?? false),
+        httpProxy: cfg?.proxy?.subscription?.httpProxy,
         parser: cfg?.proxy?.subscription?.parser
       })
     } catch (e) {
       nodes = proxyDb?.listNodes?.() || []
       if (nodes.length) {
         const msg = e?.message || String(e)
-        console.warn(`[proxy] subscription fetch failed; fallback to proxy db nodes (${nodes.length}): ${msg}`)
+        log.warn(`订阅拉取失败，回退代理 DB 节点(${nodes.length})：${msg}`)
       } else {
         try { proxyDb?.close?.() } catch {}
         const msg = e?.message || String(e)
         const hint =
-          `subscription fetch failed; ` +
-          `try rerun / increase proxy.subscription.timeoutMs / use percent-encoded URL, ` +
-          `or prewarm cache via: node scripts/subscription-prefetch.js (cacheDir=${subCacheDir}).`
-        throw new Error(`${msg}; ${hint}`, { cause: e })
+          `订阅拉取失败；` +
+          `可尝试：重试 / 增大 proxy.subscription.timeoutMs / 使用 percent-encoded URL；` +
+          `或先执行预热缓存：node scripts/subscription-prefetch.js (cacheDir=${subCacheDir})。`
+        throw new Error(`${msg}；${hint}`, { cause: e })
       }
     }
   }
   if (!nodes.length) {
     try { proxyDb?.close?.() } catch {}
-    if (required) throw new Error("subscription parsed but no supported nodes found")
-    console.warn("[proxy] subscription parsed but no supported nodes found; continue without proxy")
+    if (required) throw new Error("订阅解析成功但无可用节点")
+    log.warn("订阅解析成功但无可用节点；将不使用代理继续。")
     return { enabled: true, proxyUrls: [], close: async () => {} }
   }
 
-  console.log(`[proxy] nodes parsed: ${nodes.length}`)
+  log.info(`可用节点：${nodes.length}`)
   // Persist parsed nodes for reuse (e.g., WebUI import / fallback if subscription becomes unavailable).
   if (subUrls.length && proxyDb?.insertNode) {
     for (const n of nodes) {
@@ -404,7 +360,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
     } catch (e) {
       const msg = e?.message || String(e)
       if (required || corePref === "v2ray") throw e
-      console.warn(`[proxy] v2ray-core unavailable; skipping v2ray nodes: ${msg}`)
+      log.warn(`v2ray-core 不可用，跳过 v2ray 节点：${msg}`)
       v2rayCore = null
     }
   }
@@ -414,7 +370,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
     } catch (e) {
       const msg = e?.message || String(e)
       if (required || corePref === "mihomo") throw e
-      console.warn(`[proxy] mihomo unavailable; skipping mihomo-only nodes: ${msg}`)
+      log.warn(`mihomo 不可用，跳过 mihomo-only 节点：${msg}`)
       mihomoCore = null
     }
   }
@@ -576,7 +532,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
       if (candidates.length >= targetCandidates) break
     }
   }
-  console.log(`[proxy] probing: candidates=${candidates.length}/${nodes.length} targetPool=${poolSize} core=${corePref}`)
+  log.info(`开始探测：候选=${candidates.length}/${nodes.length} 目标池=${poolSize} core=${corePref}`)
   let nodeIdx = 0
   let portIdx = 0
   let stop = false
@@ -594,7 +550,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
     lastProgressAt = now
     const idleSec = Math.max(0, Math.round((now - lastFinishAt) / 1000))
     const msg =
-      `[proxy] probing progress: ok=${proxyUrls.length}/${poolSize} ` +
+      `探测进度：ok=${proxyUrls.length}/${poolSize} ` +
       `tried=${tried}/${candidates.length} ` +
       `assigned=${Math.min(nodeIdx, candidates.length)}/${candidates.length} ` +
       `active=${active} ` +
@@ -602,7 +558,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
       `${lastFail ? `lastFail=${lastFail}` : ""}`.trim()
     if (!force && msg === lastProgressStr) return
     lastProgressStr = msg
-    console.log(msg)
+    log.info(msg)
   }
 
   // Ensure we keep printing progress even if a worker gets stuck in startOne().
@@ -632,7 +588,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
         lastFinishAt = Date.now()
         logProgress(false)
         if (!res.ok) {
-          lastFail = String(res?.test?.error || (res?.test?.status != null ? `status=${res.test.status}` : "unusable")).slice(0, 120)
+          lastFail = String(res?.test?.error || (res?.test?.status != null ? `status=${res.test.status}` : "不可用")).slice(0, 120)
           continue
         }
 
@@ -655,7 +611,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
           cleanup: res.cleanup
         })
         proxyUrls.push(res.proxyUrl)
-        console.log(`[proxy] ok ${res.proxyUrl} ${res.node.type} ${res.node.tag} (${res.test.ms}ms status=${res.test.status})`)
+        log.info(`可用：${res.proxyUrl} ${res.node.type} ${res.node.tag} (${res.test.ms}ms status=${res.test.status})`)
         logProgress(true)
         notify(false)
         if (proxyUrls.length >= poolSize) {
@@ -666,7 +622,7 @@ export async function ensureProxyPool(cfg = {}, { onUpdate } = {}) {
         active = Math.max(0, active - 1)
         lastFinishAt = Date.now()
         lastFail = String(e?.message || e).slice(0, 120)
-        console.warn(`[proxy] start failed: ${e?.message || e}`)
+        log.warn(`启动失败：${e?.message || e}`)
         logProgress(false)
       }
     }

@@ -4,6 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { runCmd } from "../utils/exec.js"
 import { ensureDir } from "../utils/fs.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("代理")
 
 function isWin() {
   return process.platform === "win32"
@@ -57,7 +60,7 @@ export async function ensureV2rayCore({
   }
 
   if (!downloadUrl) {
-    throw new Error("proxy.v2ray.downloadUrl is required to bootstrap v2ray-core")
+    throw new Error("proxy.v2ray.downloadUrl 必填，用于下载 v2ray-core")
   }
 
   const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "limitedpanel-v2ray-"))
@@ -65,7 +68,7 @@ export async function ensureV2rayCore({
   const extractDir = path.join(tmpRoot, "extract")
 
   try {
-    console.log(`[proxy] downloading v2ray-core: ${downloadUrl}`)
+    log.info(`下载 v2ray-core：${downloadUrl}`)
     await downloadToFile(downloadUrl, zipPath)
     await extractZip(zipPath, extractDir)
 
@@ -76,7 +79,7 @@ export async function ensureV2rayCore({
       path.join(extractDir, "v2ray", exeName)
     ]
     const foundExe = candidates.find((p) => fs.existsSync(p))
-    if (!foundExe) throw new Error(`v2ray core executable not found after extract`)
+    if (!foundExe) throw new Error("解压后未找到 v2ray 可执行文件")
 
     const foundGeoip = [
       path.join(extractDir, "geoip.dat"),
@@ -91,7 +94,7 @@ export async function ensureV2rayCore({
     ].find((p) => fs.existsSync(p))
 
     if (!foundGeoip || !foundGeosite) {
-      throw new Error("geoip.dat/geosite.dat not found in v2ray release zip")
+      throw new Error("压缩包内缺少 geoip.dat / geosite.dat")
     }
 
     await ensureDir(resolvedBinDir)
@@ -104,4 +107,3 @@ export async function ensureV2rayCore({
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }) } catch {}
   }
 }
-

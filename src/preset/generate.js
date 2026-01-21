@@ -11,6 +11,9 @@ import { buildZzzBestWeapon } from "../zzz/weapon.js"
 import { ensureZzzSource } from "../zzz/source.js"
 import { loadAppConfig } from "../user-config.js"
 import { ensureDir, writeJson } from "../utils/fs.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("预设")
 
 function parseArgs(argv) {
   const args = {
@@ -238,7 +241,7 @@ export async function cmdPresetGenerate(argv) {
 
     const sampleDir = paths.samplesDir("gs")
     if (!fs.existsSync(sampleDir)) {
-      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+      throw new Error(`缺少样本目录：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
     }
     const charIds = fs
       .readdirSync(sampleDir, { withFileTypes: true })
@@ -341,12 +344,12 @@ export async function cmdPresetGenerate(argv) {
         artis: artisOut
       })
       avatar._mark = { mark: extremeMark.mark }
-      if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
+      if (!args.quiet) log.info(`${charId} ${charMeta.name}：样本=${best._mark.mark} 极限=${extremeMark.mark}`)
     }
 
     await writeJson(outPath, result, 2)
-    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
-    else console.log(`written: ${outPath}`)
+    if (args.quiet) log.info(`已写入：${outPath} 角色=${Object.keys(result.avatars).length}`)
+    else log.info(`已写入：${outPath}`)
     return
   }
 
@@ -357,7 +360,7 @@ export async function cmdPresetGenerate(argv) {
 
     const sampleDir = paths.samplesDir("sr")
     if (!fs.existsSync(sampleDir)) {
-      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+      throw new Error(`缺少样本目录：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
     }
     const charIds = fs
       .readdirSync(sampleDir, { withFileTypes: true })
@@ -437,12 +440,12 @@ export async function cmdPresetGenerate(argv) {
         artis: artisOut
       })
       avatar._mark = { mark: extremeMark.mark }
-      if (!args.quiet) console.log(`${charId} ${charMeta.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}`)
+      if (!args.quiet) log.info(`${charId} ${charMeta.name}：样本=${best._mark.mark} 极限=${extremeMark.mark}`)
     }
 
     await writeJson(outPath, result, 2)
-    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
-    else console.log(`written: ${outPath}`)
+    if (args.quiet) log.info(`已写入：${outPath} 角色=${Object.keys(result.avatars).length}`)
+    else log.info(`已写入：${outPath}`)
     return
   }
 
@@ -455,7 +458,7 @@ export async function cmdPresetGenerate(argv) {
 
     const sampleDir = paths.samplesDir("zzz")
     if (!fs.existsSync(sampleDir)) {
-      throw new Error(`Missing samples dir: ${sampleDir} (run: node src/cli.js sample:collect ...)`)
+      throw new Error(`缺少样本目录：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
     }
     const charIds = fs
       .readdirSync(sampleDir, { withFileTypes: true })
@@ -509,14 +512,14 @@ export async function cmdPresetGenerate(argv) {
 
       const extremeMark = calcZzzAvatarMark({ ...baseAvatar, equip: extremeEquip })
       outAvatar._mark = { mark: extremeMark.mark }
-      if (!args.quiet) console.log(`${charId} ${outAvatar.name}: sample=${best._mark.mark} extreme=${extremeMark.mark}${weaponPick?.signature ? " sigWeapon" : ""}`)
+      if (!args.quiet) log.info(`${charId} ${outAvatar.name}：样本=${best._mark.mark} 极限=${extremeMark.mark}${weaponPick?.signature ? " 专武" : ""}`)
     }
 
     await writeJson(outPath, result, 2)
-    if (args.quiet) console.log(`written: ${outPath} avatars=${Object.keys(result.avatars).length}`)
-    else console.log(`written: ${outPath}`)
+    if (args.quiet) log.info(`已写入：${outPath} 角色=${Object.keys(result.avatars).length}`)
+    else log.info(`已写入：${outPath}`)
     return
   }
 
-  throw new Error(`Unsupported --game: ${args.game}`)
+  throw new Error(`不支持的 --game：${args.game}`)
 }

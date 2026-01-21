@@ -3,9 +3,11 @@ import path from "node:path"
 import { createRequire } from "node:module"
 import _ from "lodash"
 import { projectRoot } from "./config.js"
+import { createLogger } from "./utils/log.js"
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
+const log = createLogger("配置")
 
 const CONFIG_DIR = path.join(projectRoot, "config")
 const DEFAULT_CONFIG_PATH = path.join(CONFIG_DIR, "defSet.yaml")
@@ -27,7 +29,7 @@ function readYamlSafe(filePath) {
     const key = String(filePath || "")
     if (key && !warnedParseFiles.has(key)) {
       warnedParseFiles.add(key)
-      console.warn(`[config] parse failed: ${filePath} (${e?.message || String(e)})`)
+      log.warn(`解析失败：${filePath} (${e?.message || String(e)})`)
     }
     return null
   }

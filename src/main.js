@@ -21,7 +21,7 @@ export async function run(argv) {
     case "verify:preset":
       return await cmdVerifyPreset(argv.slice(1))
     default:
-      console.log(`Usage:
+      console.log(`用法:
   node src/cli.js meta:sync [--game gs|sr|all]
   node src/cli.js sample:collect --game gs --uids 242422996,xxxx [--delayMs 20000]
   node src/cli.js sample:collect --game sr --uids 100843318,xxxx [--delayMs 20000]

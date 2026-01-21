@@ -2,17 +2,15 @@ import { spawn } from "node:child_process"
 import { createInterface } from "node:readline"
 import path from "node:path"
 import { enka, paths } from "../config.js"
-import { EnkaHttpError as EnkaHttpErrorGs, fetchEnkaGs } from "../enka/gs.js"
-import { EnkaHttpError as EnkaHttpErrorSr, fetchEnkaSr } from "../enka/sr.js"
-import { EnkaHttpError as EnkaHttpErrorZzz, fetchEnkaZzz, extractEnkaZzzAvatarList, enkaZzzToMysAvatars } from "../enka/zzz.js"
+import { extractEnkaZzzAvatarList, enkaZzzToMysAvatars } from "../enka/zzz.js"
 import { resolveEnkaUserAgent } from "../enka/headers.js"
 import { appendJsonl, sleep, writeJson } from "../utils/fs.js"
 import { loadGsMeta } from "../meta/gs.js"
 import { loadSrMeta } from "../meta/sr.js"
 import { openScanDb } from "../db/sqlite.js"
 import { loadAppConfig } from "../user-config.js"
-import { ProxyAgent } from "undici"
 import { ensureLimitedPanelRsBinary } from "../rust/runner.js"
+import { createLogger } from "../utils/log.js"
 
 const artisIdxMap = {
   EQUIP_BRACER: 1,
@@ -78,14 +76,6 @@ function envNum(name, fallback) {
   if (raw == null || raw === "") return fallback
   const n = Number(raw)
   return Number.isFinite(n) ? n : fallback
-}
-
-function normalizeEnkaFetcherMode(raw) {
-  const s = String(raw || "").trim().toLowerCase()
-  if (!s) return "js"
-  if (s === "rs") return "rust"
-  if ([ "js", "rust", "auto" ].includes(s)) return s
-  return "js"
 }
 
 function pickWeapon(equipList = [], weaponById = {}) {
@@ -165,7 +155,8 @@ function pickArtifactsSr(relicList = []) {
 
 export async function cmdSampleCollect(argv) {
   const args = parseArgs(argv)
-  if (!["gs", "sr", "zzz"].includes(args.game)) throw new Error(`Only --game gs|sr|zzz is supported for now (got: ${args.game})`)
+  const log = createLogger("采样")
+  if (!["gs", "sr", "zzz"].includes(args.game)) throw new Error(`仅支持 --game gs|sr|zzz（收到：${args.game}）`)
 
   const scanDb = openScanDb()
   const { data: cfg } = loadAppConfig({ ensureUser: false })
@@ -176,65 +167,27 @@ export async function cmdSampleCollect(argv) {
   const breakerOn429 = Boolean(cfg?.samples?.enka?.circuitBreaker?.breakOn429 ?? true)
   const quiet = Boolean(args.quiet || envBool("QUIET", false))
   const enkaTimeoutMs = Math.max(0, envNum("ENKA_TIMEOUT_MS", Number(cfg?.samples?.enka?.timeoutMs || 0)))
-  const proxyRateLimitMode = String(process.env.ENKA_PROXY_RATE_LIMIT || cfg?.samples?.enka?.proxyRateLimit || "memory")
-    .trim()
-    .toLowerCase()
-  const fetcherMode = normalizeEnkaFetcherMode(process.env.ENKA_FETCHER || cfg?.samples?.enka?.fetcher || "js")
 
   const proxyUrls = parseProxyUrls()
-  const proxyDispatchers = proxyUrls.map((u) => new ProxyAgent(u))
   // Without proxy we enforce a strict cross-process rate limit (sqlite-backed).
   // Using concurrency>1 in this mode does not increase throughput but can create a long
   // "silent" wait queue after restarts (many workers reserve future slots immediately).
   const requestedConcurrency = Math.max(1, Math.min(50, Number(args.concurrency) || 1))
   let concurrency = requestedConcurrency
-  if (proxyDispatchers.length === 0 && noProxyDelayMs > 0) {
+  if (proxyUrls.length === 0 && noProxyDelayMs > 0) {
     concurrency = 1
-  } else if (proxyDispatchers.length > 0) {
+  } else if (proxyUrls.length > 0) {
     // More workers than proxies won't increase throughput, but can increase 429/overhead.
-    concurrency = Math.max(1, Math.min(requestedConcurrency, proxyDispatchers.length))
+    concurrency = Math.max(1, Math.min(requestedConcurrency, proxyUrls.length))
   }
   if (!quiet && requestedConcurrency !== concurrency) {
-    const reason = proxyDispatchers.length > 0 ? "proxyCount" : "no-proxy"
-    console.log(`[samples] forcing concurrency=${concurrency} (requested=${requestedConcurrency}, reason=${reason})`)
+    const reason = proxyUrls.length > 0 ? "proxyCount" : "no-proxy"
+    log.info(`并发修正：${requestedConcurrency} -> ${concurrency} (原因=${reason})`)
   }
 
-  const proxyStates = proxyDispatchers.map((dispatcher, i) => ({
-    i,
-    url: proxyUrls[i],
-    dispatcher,
-    disabled: false,
-    consecutiveTransportFails: 0
-  }))
   const proxyRequired = envBool("PROXY_REQUIRED", Boolean(cfg?.proxy?.required ?? false))
   const maxProxyConsecutiveFailsCfg = Number(cfg?.proxy?.subscription?.maxConsecutiveFails ?? cfg?.proxy?.subscription?.maxConsecFails ?? 10)
   const maxProxyConsecutiveFails = Math.max(1, Math.min(200, envNum("PROXY_MAX_CONSEC_FAILS", maxProxyConsecutiveFailsCfg)))
-  const buckets = Math.max(1, proxyDispatchers.length || 1)
-
-  const pickProxyIndex = (startIdx = 0) => {
-    if (!proxyStates.length) return null
-    const start = Math.max(0, Math.min(proxyStates.length - 1, Number(startIdx) || 0))
-    for (let step = 0; step < proxyStates.length; step++) {
-      const idx = (start + step) % proxyStates.length
-      const st = proxyStates[idx]
-      if (!st.disabled) return idx
-    }
-    return null
-  }
-
-  const waitTurn = (() => {
-    const baseDelayMs = Number(args.delayMs) || 0
-    const jitterMs = Math.max(0, Number(args.jitterMs) || 0)
-    const nextAt = Array.from({ length: buckets }, () => 0)
-    return async (bucket = 0) => {
-      if (baseDelayMs <= 0 && jitterMs <= 0) return
-      const now = Date.now()
-      const b = Math.max(0, Math.min(buckets - 1, Number(bucket) || 0))
-      const wait = Math.max(0, nextAt[b] - now)
-      nextAt[b] = Math.max(nextAt[b], now) + baseDelayMs + (jitterMs ? Math.floor(Math.random() * jitterMs) : 0)
-      if (wait > 0) await sleep(wait)
-    }
-  })()
 
   const writeLocks = new Map()
   const appendJsonlSafe = async (filePath, obj) => {
@@ -255,11 +208,11 @@ export async function cmdSampleCollect(argv) {
         : args.count
       uidList = Array.from({ length: effectiveCount }, (_, i) => args.uidStart + i)
     } else {
-      throw new Error("Provide --uids or --uidStart + --count")
+      throw new Error("参数错误：请提供 --uids 或 --uidStart + --count")
     }
     if (uidList.length > args.maxCount) {
       uidList = uidList.slice(0, args.maxCount)
-      console.log(`UID list truncated to maxCount=${args.maxCount}`)
+      log.warn(`UID 列表已截断：maxCount=${args.maxCount}`)
     }
 
     const meta = args.game === "sr" ? await loadSrMeta() : (args.game === "gs" ? await loadGsMeta() : null)
@@ -294,7 +247,7 @@ export async function cmdSampleCollect(argv) {
           const charMeta = meta.character.byId[charId] || {}
           const weapon = pickWeapon(ds.equipList || [], meta.weapon.byId)
           const artis = pickArtifacts(ds.equipList || [], meta.artifact.artifactPieceById)
-          const hasFive = [ 1, 2, 3, 4, 5 ].every((k) => artis[k]?.name && artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
+          const hasFive = [ 1, 2, 3, 4, 5 ].every((k) => artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
           if (!hasFive) continue
 
           const rec = {
@@ -364,26 +317,11 @@ export async function cmdSampleCollect(argv) {
       }
     }
 
-    let rustBin = null
-    const wantRustFetcher = fetcherMode === "rust" || (fetcherMode === "auto" && proxyUrls.length > 0)
-    if (wantRustFetcher) {
-      try {
-        rustBin = await ensureLimitedPanelRsBinary()
-      } catch (e) {
-        const msg = e?.message || String(e)
-        if (fetcherMode === "rust") throw e
-        if (!quiet) console.warn(`[samples] rust fetcher unavailable; fallback to js: ${msg}`)
-      }
-    } else if (fetcherMode === "rust" && proxyUrls.length === 0) {
-      // This should not happen, but keep a safe fallback.
-      if (!quiet) {
-        console.warn("[samples] ENKA_FETCHER=rust requested but rust binary unavailable; using js fetcher.")
-      }
-    }
+    const rustBin = await ensureLimitedPanelRsBinary()
 
     if (rustBin) {
       if (proxyRequired && proxyUrls.length === 0) {
-        console.warn("PROXY_REQUIRED=1 but PROXY_URLS is empty; stop scanning early.")
+        log.warn(`需要代理(PROXY_REQUIRED=1)，但 PROXY_URLS 为空；game=${args.game}；提前结束。`)
       } else {
         const uidsToFetch = []
         for (let i = 0; i < uidList.length; i++) {
@@ -391,7 +329,7 @@ export async function cmdSampleCollect(argv) {
           const skip = scanDb.shouldSkipUid(uid, { game: args.game })
           if (skip.skip) {
             summary.skipped++
-            if (!quiet) console.log(`[${i + 1}/${uidList.length}] skip uid=${uid} (${skip.reason})`)
+            if (!quiet) log.info(`[${i + 1}/${uidList.length}] 跳过 game=${args.game} uid=${uid} (${skip.reason})`)
             continue
           }
           uidsToFetch.push(uid)
@@ -406,7 +344,7 @@ export async function cmdSampleCollect(argv) {
           // Safety: in no-proxy mode, keep concurrency=1 to avoid increasing QPS (each worker has its own throttle state).
           const rustConcurrency = proxyUrls.length > 0 ? concurrency : 1
           if (!quiet && proxyUrls.length === 0 && concurrency > 1) {
-            console.warn(`[samples] rust fetcher in no-proxy mode forces concurrency=1 (requested=${concurrency})`)
+            log.warn(`无代理模式下 rust 拉取强制并发=1：game=${args.game} (请求=${concurrency})`)
           }
 
           const rsArgv = [
@@ -427,7 +365,7 @@ export async function cmdSampleCollect(argv) {
           if (proxyUrls.length > 0) rsArgv.push("--proxy-urls", proxyUrls.join(","))
 
           if (!quiet) {
-            console.log(`[samples] rust fetcher: uids=${uidsToFetch.length} proxies=${proxyUrls.length} concurrency=${concurrency} delayMs=${delayMs}`)
+            log.info(`rust 拉取：game=${args.game} uids=${uidsToFetch.length} proxies=${proxyUrls.length} 并发=${rustConcurrency} delayMs=${delayMs}`)
           }
 
           const child = spawn(rustBin, rsArgv, {
@@ -456,7 +394,7 @@ export async function cmdSampleCollect(argv) {
             try {
               row = JSON.parse(s)
             } catch (e) {
-              if (!quiet) console.warn(`[samples] rust invalid jsonl: ${String(e?.message || e)} line=${s.slice(0, 200)}`)
+              if (!quiet) log.warn(`rust 输出解析失败：game=${args.game} ${String(e?.message || e)} line=${s.slice(0, 200)}`)
               continue
             }
 
@@ -467,20 +405,21 @@ export async function cmdSampleCollect(argv) {
             const status = row?.status == null ? null : Number(row.status)
             const isHtml = Boolean(row?.is_html)
             const proxy = row?.proxy != null ? String(row.proxy) : ""
+            const ctx = `game=${args.game} uid=${uid}${proxy ? ` proxy=${proxy}` : ""}`
 
             if (ok) {
               summary.ok++
-              if (!quiet) console.log(`[${processed}/${uidsToFetch.length}] ok uid=${uid}${proxy ? ` proxy=${proxy}` : ""}`)
+              if (!quiet) log.info(`[${processed}/${uidsToFetch.length}] 成功 ${ctx}`)
 
               const text = String(row?.body || "")
               let data
               try {
                 data = JSON.parse(text)
               } catch (e) {
-                const msg = `invalid json body: ${String(e?.message || e)}`
+                const msg = `JSON 解析失败：${String(e?.message || e)}`
                 scanDb.recordFailure(uid, { game: args.game, status: 200, error: msg })
                 summary.byStatus["200"] = (summary.byStatus["200"] || 0) + 1
-                if (!quiet) console.warn(`  fetch failed: ${msg}`)
+                if (!quiet) log.warn(`失败：${ctx} ${msg}`)
                 continue
               }
 
@@ -488,12 +427,12 @@ export async function cmdSampleCollect(argv) {
               continue
             }
 
-            const msg = String(row?.error || (status != null ? `Enka HTTP ${status} uid=${uid}` : "fetch failed"))
+            const msg = String(row?.error || (status != null ? `Enka HTTP ${status} uid=${uid}` : "请求失败"))
             if (isHtml) {
               scanDb.recordFailure(uid, { game: args.game, status, error: msg })
               summary.html++
               if (status != null) summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
-              if (!quiet) console.warn(`  fetch failed: ${msg} (html)`)
+              if (!quiet) log.warn(`失败：${ctx} ${msg} (html)`)
               continue
             }
 
@@ -501,7 +440,7 @@ export async function cmdSampleCollect(argv) {
               scanDb.markPermanent(uid, { game: args.game, status, error: msg })
               summary.permanent++
               summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
-              if (!quiet) console.warn(`  fetch failed: ${msg} (permanent)`)
+              if (!quiet) log.warn(`失败：${ctx} ${msg} (永久)`)
               continue
             }
 
@@ -513,26 +452,26 @@ export async function cmdSampleCollect(argv) {
               )
               scanDb.recordFailure(uid, { game: args.game, status, error: msg, retryAfterMs })
               summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
-              if (!quiet) console.warn(`  fetch failed: ${msg} (rate limited)`)
+              if (!quiet) log.warn(`失败：${ctx} ${msg} (限流)`)
               continue
             }
 
             if (status != null) {
               scanDb.recordFailure(uid, { game: args.game, status, error: msg })
               summary.byStatus[String(status)] = (summary.byStatus[String(status)] || 0) + 1
-              if (!quiet) console.warn(`  fetch failed: ${msg}`)
+              if (!quiet) log.warn(`失败：${ctx} ${msg}`)
               continue
             }
 
             scanDb.recordFailure(uid, { game: args.game, status: null, error: msg })
             summary.transport++
-            if (!quiet) console.warn(`  fetch failed: ${msg}`)
+            if (!quiet) log.warn(`失败：${ctx} ${msg}`)
           }
 
           const code = await exitCodePromise
-          if (code !== 0) throw new Error(`rust enka-fetch failed (code=${code})`)
+          if (code !== 0) throw new Error(`rust enka-fetch 失败 (code=${code})`)
           if (!quiet && processed < uidsToFetch.length) {
-            console.warn(`[samples] rust fetcher finished early: got=${processed}/${uidsToFetch.length}`)
+            log.warn(`rust 拉取提前结束：game=${args.game} got=${processed}/${uidsToFetch.length}`)
           }
         }
       }
@@ -541,14 +480,15 @@ export async function cmdSampleCollect(argv) {
       await Promise.allSettled([ ...writeLocks.values() ])
 
       if (quiet) {
-        console.log(`[done] game=${summary.game} total=${summary.total} ok=${summary.ok} skipped=${summary.skipped} permanent=${summary.permanent} transport=${summary.transport}`)
-        console.log(`[done] byStatus=${JSON.stringify(summary.byStatus)}`)
+        log.info(`完成：game=${summary.game} 总=${summary.total} 成功=${summary.ok} 跳过=${summary.skipped} 永久=${summary.permanent} 传输=${summary.transport}`)
+        log.info(`状态码：${JSON.stringify(summary.byStatus)}`)
       } else {
-        console.log("done.")
+        log.info("完成。")
       }
       return
     }
 
+    /* JS enka fetcher (legacy) removed; rust-only
     const runOne = async (pos, uid, workerState) => {
       const skip = scanDb.shouldSkipUid(uid, { game: args.game })
       if (skip.skip) {
@@ -736,7 +676,7 @@ export async function cmdSampleCollect(argv) {
           const charMeta = meta.character.byId[charId] || {}
           const weapon = pickWeapon(ds.equipList || [], meta.weapon.byId)
           const artis = pickArtifacts(ds.equipList || [], meta.artifact.artifactPieceById)
-          const hasFive = [ 1, 2, 3, 4, 5 ].every((k) => artis[k]?.name && artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
+          const hasFive = [ 1, 2, 3, 4, 5 ].every((k) => artis[k]?.mainId && (artis[k]?.attrIds?.length || 0) > 0)
           if (!hasFive) continue
 
           const rec = {
@@ -827,11 +767,9 @@ export async function cmdSampleCollect(argv) {
     } else {
       console.log("done.")
     }
+  */
   } finally {
     scanDb.close()
-    for (const d of proxyDispatchers) {
-      try { d.close?.() } catch {}
-    }
   }
 }
 

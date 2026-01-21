@@ -9,6 +9,9 @@ import { calcGsBuildMark } from "../score/gs.js"
 import { calcSrBuildMark } from "../score/sr.js"
 import { calcZzzAvatarMark } from "../score/zzz.js"
 import { loadAppConfig } from "../user-config.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("校验")
 
 function toNum(v, fallback = 0) {
   const n = Number(v)
@@ -146,10 +149,10 @@ export async function cmdVerifyPreset(argv) {
   }
 
   if (!args.quiet) {
-    console.log(`[verify] game=${game} uid=${uid} threshold=${threshold} pass=${pass ? 1 : 0}`)
-    console.log(`[verify] total=${summary.total} withMark=${summary.withMark} min=${min} p50=${p50} p90=${p90} mean=${mean}`)
+    log.info(`预设：game=${game} uid=${uid} 阈值=${threshold} 通过=${pass ? 1 : 0}`)
+    log.info(`统计：角色=${summary.total} 有评分=${summary.withMark} min=${min} p50=${p50} p90=${p90} mean=${mean}`)
     if (summary.failed.length) {
-      console.log(`[verify] failed(top${summary.failed.length}): ${summary.failed.map((r) => `${r.name}(${r.id}):${r.mark}`).join("; ")}`)
+      log.warn(`未达标(top${summary.failed.length})：${summary.failed.map((r) => `${r.name}(${r.id}):${r.mark}`).join("; ")}`)
     }
   }
 
@@ -158,4 +161,3 @@ export async function cmdVerifyPreset(argv) {
   }
   return summary
 }
-

@@ -6,6 +6,9 @@ import { ProxyAgent } from "undici"
 import { projectRoot } from "../config.js"
 import { runCmd } from "../utils/exec.js"
 import { ensureDir } from "../utils/fs.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("ZZZ")
 
 function toBool(v, fallback = false) {
   if (v == null || v === "") return fallback
@@ -90,6 +93,17 @@ function hasZzzPluginFiles(pluginRoot) {
       return false
     }
   })
+}
+
+function safeUrlForLog(url) {
+  try {
+    const u = new URL(String(url))
+    u.username = ""
+    u.password = ""
+    return u.toString()
+  } catch {
+    return String(url || "")
+  }
 }
 
 function gitNoProxyArgs() {
@@ -200,7 +214,7 @@ async function syncGithubZip({ repo, ref, dir }) {
     for (const proxyUrl of tryList) {
       try {
         if (proxyUrl) {
-          console.log(`[zzz] downloading (via proxy): ${zipUrl} -> ${proxyUrl}`)
+          log.info(`下载：${zipUrl} (代理 ${safeUrlForLog(proxyUrl)})`)
           const controller = new AbortController()
           const tid = setTimeout(() => controller.abort(), 120_000)
           try {
@@ -217,7 +231,7 @@ async function syncGithubZip({ repo, ref, dir }) {
             clearTimeout(tid)
           }
         } else {
-          console.log(`[zzz] downloading: ${zipUrl}`)
+          log.info(`下载：${zipUrl}`)
           await downloadToFile(zipUrl, zipPath)
         }
         lastErr = null
@@ -233,12 +247,12 @@ async function syncGithubZip({ repo, ref, dir }) {
 
     const entries = await fsp.readdir(extractDir, { withFileTypes: true })
     const root = entries.find((d) => d.isDirectory())
-    if (!root) throw new Error("zip extracted but no directory found")
+    if (!root) throw new Error("解压成功但未找到目录")
     const extractedRoot = path.join(extractDir, root.name)
 
     // Overwrite only within projectRoot to avoid accidental deletion of user paths.
     if (!isSubPath(projectRoot, targetDir)) {
-      throw new Error(`refuse to overwrite non-project dir: ${targetDir}`)
+      throw new Error(`拒绝覆盖项目目录外路径：${targetDir}`)
     }
 
     await fsp.rm(targetDir, { recursive: true, force: true }).catch(() => {})
@@ -261,7 +275,7 @@ async function syncGitRepo({ repo, ref, dir }) {
 
   if (fs.existsSync(targetDir)) {
     if (!isSubPath(projectRoot, targetDir)) {
-      throw new Error(`refuse to overwrite non-project dir: ${targetDir}`)
+      throw new Error(`拒绝覆盖项目目录外路径：${targetDir}`)
     }
     await fsp.rm(targetDir, { recursive: true, force: true }).catch(() => {})
   }
@@ -275,9 +289,9 @@ export async function ensureZzzSource(cfg = {}, { force = false } = {}) {
   if (sourceType !== "github") {
     if (hasZzzPluginFiles(pluginRoot)) return { sourceType, pluginRoot }
     const hint =
-      `ZZZ-Plugin files not found under: ${pluginRoot}\n` +
-      `- Install/update local plugin: <YunzaiRoot>/plugins/ZZZ-Plugin\n` +
-      `- Or set config: zzz.source.type=github (auto pull from GitHub)`
+      `缺少 ZZZ-Plugin 文件：${pluginRoot}\n` +
+      `- 请安装/更新本地插件：<YunzaiRoot>/plugins/ZZZ-Plugin\n` +
+      `- 或设置：zzz.source.type=github（自动从 GitHub 拉取）`
     throw new Error(hint)
   }
 
@@ -303,23 +317,23 @@ export async function ensureZzzSource(cfg = {}, { force = false } = {}) {
   const hasGit = fs.existsSync(path.join(pluginRoot, ".git"))
   if (!force && ready && hasGit && autoSync) {
     try {
-      console.log(`[zzz] git update: ${repo}#${ref} -> ${pluginRoot}`)
+      log.info(`git 更新：${repo}#${ref} -> ${pluginRoot}`)
       await syncGitRepo({ repo, ref, dir: pluginRoot })
       return { sourceType, pluginRoot }
     } catch (e) {
-      console.warn(`[zzz] git update failed; fallback to zip: ${e?.message || String(e)}`)
+      log.warn(`git 更新失败，改用 zip：${e?.message || String(e)}`)
     }
   }
 
   // Prefer zip download for initial bootstrap (more reliable than git under unstable networks).
-  console.log(`[zzz] sync source (zip): ${repo}#${ref} -> ${pluginRoot}`)
+  log.info(`同步（zip）：${repo}#${ref} -> ${pluginRoot}`)
   try {
     await syncGithubZip({ repo, ref, dir: pluginRoot })
   } catch (e) {
     // Fallback to local plugin if available (common in Yunzai environments).
     const localRoot = resolveZzzLocalPluginRoot(cfg)
     if (hasZzzPluginFiles(localRoot)) {
-      console.warn(`[zzz] github sync failed; fallback to local plugin: ${localRoot} (${e?.message || String(e)})`)
+      log.warn(`GitHub 同步失败，改用本地插件：${localRoot} (${e?.message || String(e)})`)
       return { sourceType: "yunzai-plugin", pluginRoot: localRoot }
     }
     throw e
@@ -327,7 +341,7 @@ export async function ensureZzzSource(cfg = {}, { force = false } = {}) {
 
   if (!hasZzzPluginFiles(pluginRoot)) {
     const missing = requiredZzzFiles(pluginRoot).filter((p) => !fs.existsSync(p))
-    throw new Error(`[zzz] synced but required files still missing: ${missing.join(", ")}`)
+    throw new Error(`同步完成但仍缺少必要文件：${missing.join(", ")}`)
   }
 
   return { sourceType, pluginRoot }

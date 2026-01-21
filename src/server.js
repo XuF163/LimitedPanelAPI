@@ -11,7 +11,10 @@ import { loadAppConfig } from "./user-config.js"
 import { cmdMetaSync } from "./meta/sync.js"
 import { openProxyDb } from "./db/proxy.js"
 import { openScanDb } from "./db/sqlite.js"
-import { loadSubscriptionNodes, nodeKey as subscriptionNodeKey, parseSubscriptionText, parseSubscriptionTextAsync } from "./proxy/subscription.js"
+import { loadSubscriptionNodes, nodeKey as subscriptionNodeKey, parseSubscriptionTextAsync } from "./proxy/subscription.js"
+import { createLogger } from "./utils/log.js"
+
+const log = createLogger("服务")
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
@@ -277,14 +280,16 @@ function normalizeSamplesMode(m, fallback = "playerdata") {
   return [ "playerdata", "enka" ].includes(s) ? s : fallback
 }
 
-function normalizeEnkaFetcherMode(m, fallback = "auto") {
+function normalizeEnkaFetcherMode(m, fallback = "rust") {
   const s = String(m || "").trim().toLowerCase()
-  return [ "js", "rust", "auto" ].includes(s) ? s : fallback
+  if ([ "rust", "rs", "auto", "js" ].includes(s)) return "rust"
+  return fallback
 }
 
-function normalizeSubParserMode(m, fallback = "auto") {
+function normalizeSubParserMode(m, fallback = "rust") {
   const s = String(m || "").trim().toLowerCase()
-  return [ "js", "rust", "auto" ].includes(s) ? s : fallback
+  if ([ "rust", "rs", "auto", "js" ].includes(s)) return "rust"
+  return fallback
 }
 
 function normalizeSimpleConfigPayload(input, effectiveCfg = {}) {
@@ -922,12 +927,12 @@ export async function startServer({ port, host } = {}) {
       await listenOnce(server, resolvedPort, resolvedHost)
     } catch (e) {
       if (e?.code === "EADDRINUSE") {
-        console.warn(`[auto] port in use: ${resolvedHost}:${resolvedPort}; try kill old process on this port...`)
+        log.warn(`端口占用：${resolvedHost}:${resolvedPort}，尝试清理旧进程...`)
         const freed = await tryFreePort(resolvedPort)
         if (!freed.ok) {
           throw new Error(
             `listen EADDRINUSE: ${resolvedHost}:${resolvedPort} (pid=${freed.pids?.join(",") || "?"}). ` +
-              `Please close the old process or change server.port.`,
+              `请关闭旧进程或修改 server.port。`,
             { cause: e }
           )
         }
@@ -966,7 +971,7 @@ export async function startServer({ port, host } = {}) {
       process.once("SIGTERM", cleanup)
     } catch {}
 
-    console.log(`listening: http://127.0.0.1:${resolvedPort} (host=${resolvedHost})`)
+    log.info(`已监听：http://127.0.0.1:${resolvedPort} (host=${resolvedHost})`)
     return server
   })()
 

@@ -7,6 +7,9 @@ import { loadGsMeta } from "../meta/gs.js"
 import { loadSrMeta } from "../meta/sr.js"
 import { calcGsBuildMark } from "../score/gs.js"
 import { calcSrBuildMark } from "../score/sr.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("梁氏对比")
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
@@ -52,7 +55,7 @@ export async function cmdVerifyLiangshi(argv) {
   const metaCache = {}
   for (const game of games) {
     if (!["gs", "sr"].includes(game)) {
-      console.warn(`[skip] unsupported game=${game}`)
+      log.warn(`跳过：不支持的游戏 game=${game}`)
       continue
     }
 
@@ -60,11 +63,11 @@ export async function cmdVerifyLiangshi(argv) {
     const basePath = path.join(yunzaiRoot, "plugins", "liangshi-calc", "replace", "data", String(panelModel), "PlayerData", game, `${uid}.json`)
 
     if (!fs.existsSync(ourPath)) {
-      console.warn(`[missing] our ${game}: ${ourPath}`)
+      log.warn(`缺失：本地输出 ${game} ${ourPath}`)
       continue
     }
     if (!fs.existsSync(basePath)) {
-      console.warn(`[missing] liangshi ${game}: ${basePath}`)
+      log.warn(`缺失：梁氏基线 ${game} ${basePath}`)
       continue
     }
 
@@ -80,8 +83,8 @@ export async function cmdVerifyLiangshi(argv) {
     }
     const meta = metaCache[game]
 
-    console.log(`== verify liangshi game=${game} uid=${uid} panelmodel=${panelModel} ==`)
-    console.log(`avatars: ours=${Object.keys(ourAvatars).length} liangshi=${Object.keys(baseAvatars).length} common=${ids.length}`)
+    log.info(`开始：game=${game} uid=${uid} panelmodel=${panelModel}`)
+    log.info(`角色：我方=${Object.keys(ourAvatars).length} 梁氏=${Object.keys(baseAvatars).length} 交集=${ids.length}`)
 
     for (const id of ids) {
       const a = ourAvatars[id]
@@ -92,12 +95,12 @@ export async function cmdVerifyLiangshi(argv) {
         const am = await calcGsBuildMark(meta, { charId: Number(a.id || id), charName: a.name, elem: a.elem, weapon: a.weapon, cons: a.cons, artis: a.artis })
         const bm = await calcGsBuildMark(meta, { charId: Number(b.id || id), charName: b.name, elem: b.elem, weapon: b.weapon, cons: b.cons, artis: b.artis })
         const diff = Math.round((am.mark - bm.mark) * 10) / 10
-        console.log(`${id} ${a.name}: ours=${am.mark} liangshi=${bm.mark} diff=${diff}`)
+        log.info(`${id} ${a.name}：我方=${am.mark} 梁氏=${bm.mark} 差=${diff}`)
       } else {
         const am = calcSrBuildMark(meta, { charId: Number(a.id || id), charName: a.name, artis: a.artis })
         const bm = calcSrBuildMark(meta, { charId: Number(b.id || id), charName: b.name, artis: b.artis })
         const diff = Math.round((am.mark - bm.mark) * 10) / 10
-        console.log(`${id} ${a.name}: ours=${am.mark} liangshi=${bm.mark} diff=${diff}`)
+        log.info(`${id} ${a.name}：我方=${am.mark} 梁氏=${bm.mark} 差=${diff}`)
       }
     }
   }

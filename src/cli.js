@@ -1,8 +1,14 @@
 #!/usr/bin/env node
-import { run } from "./main.js"
+import { bootstrap } from "./bootstrap.js"
 
-run(process.argv.slice(2)).catch((err) => {
+await bootstrap()
+
+const { run } = await import("./main.js")
+
+try {
+  await run(process.argv.slice(2))
+} catch (err) {
   console.error(err?.stack || err)
   process.exitCode = 1
-})
+}
 

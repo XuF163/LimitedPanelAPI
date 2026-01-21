@@ -15,6 +15,58 @@ function fileExists(p) {
   }
 }
 
+function statMtimeMs(p) {
+  try {
+    return fs.statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+function newestMtimeInDir(dir, { maxDepth = 4 } = {}) {
+  try {
+    if (maxDepth < 0) return 0
+    const st = fs.statSync(dir)
+    if (!st.isDirectory()) return st.mtimeMs
+
+    let newest = st.mtimeMs
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+    for (const e of entries) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        newest = Math.max(newest, newestMtimeInDir(p, { maxDepth: maxDepth - 1 }))
+      } else if (e.isFile()) {
+        // Only care about build-relevant files.
+        if (/\.(rs|toml|lock)$/i.test(e.name)) {
+          newest = Math.max(newest, statMtimeMs(p))
+        }
+      }
+    }
+    return newest
+  } catch {
+    return 0
+  }
+}
+
+function shouldRebuildBinary(binPath) {
+  try {
+    if (!fileExists(binPath)) return true
+    const binMtime = statMtimeMs(binPath)
+
+    const newestSource = Math.max(
+      statMtimeMs(path.join(crateRoot, "Cargo.toml")),
+      statMtimeMs(path.join(crateRoot, "Cargo.lock")),
+      statMtimeMs(path.join(crateRoot, "build.rs")),
+      newestMtimeInDir(path.join(crateRoot, "src"), { maxDepth: 6 })
+    )
+
+    // Add a small tolerance to avoid false positives on some filesystems.
+    return newestSource > binMtime + 1000
+  } catch {
+    return false
+  }
+}
+
 function findVsDevCmdBat() {
   if (process.platform !== "win32") return ""
   const roots = [
@@ -60,9 +112,9 @@ export async function ensureLimitedPanelRsBinary({ release = true, autoBuild = t
     if (envBin) return path.resolve(envBin)
 
     const binPath = targetBinPath({ release })
-    if (fileExists(binPath)) return binPath
-
     const wantBuild = autoBuild && !envBool("RUST_NO_BUILD", false)
+    if (fileExists(binPath) && (!wantBuild || !shouldRebuildBinary(binPath))) return binPath
+
     if (!wantBuild) throw new Error(`missing rust binary: ${binPath}`)
 
     if (!findOnPath("cargo")) throw new Error("cargo not found on PATH (install Rust toolchain or set LIMITEDPANEL_RS_BIN)")

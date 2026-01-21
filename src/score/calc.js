@@ -3,6 +3,9 @@ import { loadGsMeta } from "../meta/gs.js"
 import { calcGsBuildMark } from "./gs.js"
 import { loadSrMeta } from "../meta/sr.js"
 import { calcSrBuildMark } from "./sr.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("评分")
 
 function parseArgs(argv) {
   const args = { game: "gs", file: "", charId: null }
@@ -17,9 +20,9 @@ function parseArgs(argv) {
 
 export async function cmdScoreCalc(argv) {
   const args = parseArgs(argv)
-  if (!args.file) throw new Error("--file is required")
+  if (!args.file) throw new Error("--file 必填")
 
-  if (!["gs", "sr"].includes(args.game)) throw new Error(`Only --game gs|sr is supported for now (got: ${args.game})`)
+  if (!["gs", "sr"].includes(args.game)) throw new Error(`暂仅支持 --game gs|sr（当前：${args.game}）`)
   const meta = args.game === "sr" ? await loadSrMeta() : await loadGsMeta()
   const txt = await fs.readFile(args.file, "utf8")
   const data = JSON.parse(txt)
@@ -35,7 +38,7 @@ export async function cmdScoreCalc(argv) {
         charName: a.name,
         artis: a.artis
       })
-      console.log(`${id} ${a.name} mark=${ret.mark}`)
+      log.info(`${id} ${a.name}：评分=${ret.mark}`)
     } else {
       const ret = await calcGsBuildMark(meta, {
         charId: Number(a.id || id),
@@ -45,7 +48,7 @@ export async function cmdScoreCalc(argv) {
         cons: a.cons,
         artis: a.artis
       })
-      console.log(`${id} ${a.name} mark=${ret.mark}`)
+      log.info(`${id} ${a.name}：评分=${ret.mark}`)
     }
   }
 }

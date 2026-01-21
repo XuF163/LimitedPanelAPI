@@ -4,6 +4,9 @@ import path from "node:path"
 import { metaRepo as defaultMetaRepo, paths, projectRoot } from "../config.js"
 import { loadAppConfig } from "../user-config.js"
 import { runCmd } from "../utils/exec.js"
+import { createLogger } from "../utils/log.js"
+
+const log = createLogger("元数据")
 
 function gitNoProxyArgs() {
   // Disable git's proxy settings regardless of global/system configs.
@@ -220,6 +223,6 @@ export async function cmdMetaSync(argv) {
     if (!["gs","sr"].includes(g)) throw new Error(`Invalid --game: ${g}`)
     await syncOne(g, cfg)
   }
-  console.log("meta synced:", games.join(","))
+  log.info(`已同步：${games.join(",")}`)
 }
 
