@@ -250,6 +250,9 @@ export async function cmdPresetGenerate(argv) {
       .filter((s) => /^\d+$/.test(s))
 
     const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+    if (ids.length === 0) {
+      throw new Error(`未找到任何样本文件：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
+    }
 
     const result = {
       uid: String(args.uid),
@@ -369,6 +372,9 @@ export async function cmdPresetGenerate(argv) {
       .filter((s) => /^\d+$/.test(s))
 
     const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+    if (ids.length === 0) {
+      throw new Error(`未找到任何样本文件：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
+    }
 
     const result = {
       uid: String(args.uid),
@@ -467,6 +473,9 @@ export async function cmdPresetGenerate(argv) {
       .filter((s) => /^\d+$/.test(s))
 
     const ids = args.limitChars > 0 ? charIds.slice(0, args.limitChars) : charIds
+    if (ids.length === 0) {
+      throw new Error(`未找到任何样本文件：${sampleDir}（请先运行：node src/cli.js sample:collect ...）`)
+    }
 
     const result = {
       uid: String(args.uid),

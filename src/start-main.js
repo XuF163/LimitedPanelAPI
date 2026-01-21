@@ -97,6 +97,29 @@ function hasAnySamples(game) {
   return files.length > 0
 }
 
+function resolvePresetUid(game, cfg) {
+  const defaultPresetUid = game === "zzz" ? "10000000" : "100000000"
+  return String(
+    game === "zzz"
+      ? (process.env.PRESET_UID_ZZZ || cfg?.preset?.uidZzz || defaultPresetUid)
+      : (process.env.PRESET_UID || cfg?.preset?.uid || defaultPresetUid)
+  ).trim() || defaultPresetUid
+}
+
+function isUsablePresetFile(game, cfg) {
+  try {
+    const uid = resolvePresetUid(game, cfg)
+    const outPath = path.join(paths.outDir(game), `${uid}.json`)
+    if (!fs.existsSync(outPath)) return false
+    const ds = JSON.parse(fs.readFileSync(outPath, "utf8"))
+    const avatars = ds?.avatars
+    if (!avatars || typeof avatars !== "object") return false
+    return Object.keys(avatars).length > 0
+  } catch {
+    return false
+  }
+}
+
 function normalizeMetaSourceType(t) {
   const s = String(t || "").trim().toLowerCase()
   if ([ "miao-plugin", "miaoplugin", "miao" ].includes(s)) return "miao-plugin"
@@ -460,6 +483,11 @@ async function main() {
           if (rem <= 0) continue
           const per = Math.min(stepCount, rem)
           await ensureSamples(g, { force, maxCountOverride: per }).catch((e) => logSamples.warn(`采样失败：game=${g} ${e?.message || String(e)}`))
+          // When ENKA_MAX_COUNT is very large, the round-robin loop may run for a long time before preset generation.
+          // Ensure we generate an initial preset once samples are available so users can start using it early.
+          if (!isUsablePresetFile(g, cfg) && hasAnySamples(g)) {
+            await ensurePreset(g, { force: true }).catch((e) => logPreset.warn(`生成失败：game=${g} ${e?.message || String(e)}`))
+          }
           remaining[g] = Math.max(0, rem - per)
           did = true
         }
@@ -579,14 +607,17 @@ async function main() {
         const remaining = Object.fromEntries(enkaGames.map((g) => [g, maxCount]))
         while (true) {
           let did = false
-          for (const g of games) {
-            const rem = Number(remaining[g] || 0)
-            if (rem <= 0) continue
-            const per = Math.min(stepCount, rem)
-            await ensureSamples(g, { force: forceRefresh, maxCountOverride: per }).catch((e) => logSamples.warn(`采样失败：game=${g} ${e?.message || String(e)}`))
-            remaining[g] = Math.max(0, rem - per)
-            did = true
+        for (const g of games) {
+          const rem = Number(remaining[g] || 0)
+          if (rem <= 0) continue
+          const per = Math.min(stepCount, rem)
+          await ensureSamples(g, { force: forceRefresh, maxCountOverride: per }).catch((e) => logSamples.warn(`采样失败：game=${g} ${e?.message || String(e)}`))
+          if (!isUsablePresetFile(g, cfg2) && hasAnySamples(g)) {
+            await ensurePreset(g, { force: true }).catch((e) => logPreset.warn(`生成失败：game=${g} ${e?.message || String(e)}`))
           }
+          remaining[g] = Math.max(0, rem - per)
+          did = true
+        }
           if (!did) break
           if (enkaGames.every((g) => Number(remaining[g] || 0) <= 0)) break
         }

@@ -220,7 +220,7 @@ qa:
     # 每个代理的请求间隔（毫秒）。总吞吐量≈代理数 / delayMs
     delayMs: 3000
     # 并发 worker 数（建议 <= 代理池数量）
-    concurrency: 20
+    concurrency: 230
     # 单次 Enka 请求超时（毫秒）
     enkaTimeoutMs: 15000
     gs:
