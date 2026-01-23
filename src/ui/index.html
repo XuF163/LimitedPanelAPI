@@ -1,0 +1,1246 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LimitedPanelAPI · 配置面板</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg0: #070a13;
+        --bg1: #0b1020;
+        --header-bg: rgba(11, 16, 32, 0.75);
+        --card: rgba(255, 255, 255, 0.06);
+        --card2: rgba(255, 255, 255, 0.04);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --accent: #7aa2ff;
+        --accent2: #b18cff;
+        --danger: #ff6b6b;
+        --ok: #3ddc84;
+        --shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+        --radius: 16px;
+        --radius-sm: 12px;
+        --ring: 0 0 0 4px rgba(122, 162, 255, 0.22);
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg0: #f7f8fb;
+          --bg1: #eef1f7;
+          --header-bg: rgba(247, 248, 251, 0.8);
+          --card: rgba(255, 255, 255, 0.78);
+          --card2: rgba(255, 255, 255, 0.58);
+          --border: rgba(15, 23, 42, 0.12);
+          --text: rgba(15, 23, 42, 0.92);
+          --muted: rgba(15, 23, 42, 0.68);
+          --accent: #2f6bff;
+          --accent2: #7c3aed;
+          --danger: #d64545;
+          --ok: #15803d;
+          --shadow: 0 14px 40px rgba(2, 6, 23, 0.14);
+          --ring: 0 0 0 4px rgba(47, 107, 255, 0.18);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        color: var(--text);
+        background:
+          radial-gradient(900px 600px at 10% -10%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+          radial-gradient(800px 520px at 92% 6%, color-mix(in srgb, var(--accent2) 34%, transparent), transparent 55%),
+          linear-gradient(180deg, var(--bg0), var(--bg1));
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        * { transition: none !important; animation: none !important; }
+      }
+
+      a { color: inherit; text-decoration: none; }
+      code, .mono { font-family: var(--mono); }
+      code { font-size: 0.95em; }
+
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 18px;
+      }
+
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: var(--header-bg);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+      .header-inner {
+        padding: 14px 0 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 240px;
+      }
+      .logo {
+        width: 38px;
+        height: 38px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, var(--accent), var(--accent2));
+        box-shadow: 0 12px 26px color-mix(in srgb, var(--accent) 25%, transparent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+      }
+      .logo svg { display: block; }
+      .brand-title {
+        font-weight: 650;
+        letter-spacing: 0.2px;
+        font-size: 14px;
+        line-height: 1.2;
+      }
+      .brand-sub {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.2;
+        margin-top: 2px;
+      }
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .nav {
+        padding: 0 0 14px;
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .nav::-webkit-scrollbar { display: none; }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--card2);
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+      }
+      .chip:hover {
+        color: var(--text);
+        border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+        background: color-mix(in srgb, var(--card2) 70%, transparent);
+      }
+      .chip:focus-visible { outline: none; box-shadow: var(--ring); }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--card2);
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+      .badge.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+
+      .btn {
+        appearance: none;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text);
+        padding: 9px 12px;
+        border-radius: 12px;
+        cursor: pointer;
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+      }
+      .btn svg { width: 16px; height: 16px; opacity: 0.92; }
+      .btn:hover {
+        border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+        background: color-mix(in srgb, var(--card) 78%, transparent);
+      }
+      .btn:focus-visible { outline: none; box-shadow: var(--ring); }
+      .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .btn.primary {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+        background: linear-gradient(
+          135deg,
+          color-mix(in srgb, var(--accent) 26%, var(--card)),
+          color-mix(in srgb, var(--accent2) 18%, var(--card))
+        );
+      }
+
+      .main { padding: 18px 0 40px; }
+      section { scroll-margin-top: 110px; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        gap: 12px;
+      }
+
+      .card {
+        grid-column: 1 / -1;
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+      .card.split { grid-column: span 6; }
+      @media (max-width: 980px) {
+        .card.split { grid-column: 1 / -1; }
+      }
+      .card-hd {
+        padding: 14px 14px 12px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        border-bottom: 1px solid var(--border);
+      }
+      .card-title {
+        font-size: 13px;
+        font-weight: 650;
+        letter-spacing: 0.2px;
+        margin: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .card-sub {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.35;
+      }
+      .card-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .card-bd { padding: 14px; }
+      .card-ft {
+        padding: 12px 14px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 72px 1fr;
+        gap: 8px 12px;
+        align-items: center;
+        margin: 0;
+      }
+      .kv .k { color: var(--muted); font-size: 12px; }
+      .kv .v { font-size: 12px; }
+      .links {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--card2);
+        color: var(--muted);
+        font-size: 12px;
+        cursor: pointer;
+        transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+      }
+      .link:hover {
+        color: var(--text);
+        border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+      }
+      .link:focus-visible { outline: none; box-shadow: var(--ring); }
+
+      .form-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+      .group {
+        grid-column: span 6;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--card2);
+        padding: 12px;
+      }
+      @media (max-width: 980px) {
+        .group { grid-column: 1 / -1; }
+      }
+      .group-title {
+        font-size: 12px;
+        font-weight: 650;
+        color: var(--text);
+        margin: 0 0 10px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 0 0 10px;
+      }
+      .field:last-child { margin-bottom: 0; }
+      .field label { font-size: 12px; color: var(--muted); }
+      input[type="text"],
+      input[type="number"],
+      input[type="password"],
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: transparent;
+        color: var(--text);
+        padding: 10px 12px;
+        font-size: 13px;
+        outline: none;
+      }
+      textarea { resize: vertical; }
+      input:focus-visible,
+      textarea:focus-visible,
+      select:focus-visible {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+        box-shadow: var(--ring);
+      }
+      input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+      .check {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        color: var(--text);
+        cursor: pointer;
+        user-select: none;
+      }
+      .help { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+      .uid-grid {
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        gap: 10px;
+      }
+      .uid-grid .uid-card {
+        grid-column: span 4;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        background: color-mix(in srgb, var(--card2) 85%, transparent);
+      }
+      @media (max-width: 980px) {
+        .uid-grid .uid-card { grid-column: 1 / -1; }
+      }
+      .uid-title { font-size: 12px; font-weight: 650; margin: 0 0 8px; color: var(--text); }
+
+      .ta-small { min-height: 120px; font-family: var(--mono); font-size: 12px; }
+      #yaml { min-height: 560px; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+
+      details.details {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--card);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+      details.details > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 14px;
+        font-size: 13px;
+        font-weight: 650;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      details.details > summary::-webkit-details-marker { display: none; }
+      details.details > summary .muted { font-weight: 500; font-size: 12px; color: var(--muted); }
+      details.details[open] > summary { background: color-mix(in srgb, var(--card2) 65%, transparent); }
+      .toolbar {
+        padding: 12px 14px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .toolbar .left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .toolbar label { font-size: 12px; color: var(--muted); }
+      .toolbar select { width: auto; }
+      .details-body { padding: 12px 14px 14px; }
+
+      .resultbox {
+        margin-top: 12px;
+        border-top: 1px solid var(--border);
+        padding: 12px 14px 14px;
+        font-family: var(--mono);
+        font-size: 12px;
+        white-space: pre-wrap;
+        color: var(--muted);
+      }
+      .resultbox.hidden { display: none; }
+      .resultbox.err { color: var(--danger); }
+
+      .status {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        max-width: min(560px, calc(100vw - 32px));
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: var(--radius);
+        padding: 12px 14px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+        font-family: var(--mono);
+        font-size: 12px;
+        white-space: pre-wrap;
+        color: var(--muted);
+        opacity: 0;
+        transform: translateY(8px);
+        pointer-events: none;
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+      .status[data-show="1"] {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .status.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+      .status.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+    </style>
+  </head>
+  <body>
+    <header class="header">
+      <div class="container header-inner">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M7 6.5a2.5 2.5 0 0 1 2.5-2.5h6A2.5 2.5 0 0 1 18 6.5V20H9.5A2.5 2.5 0 0 1 7 17.5V6.5Z"
+                stroke="rgba(255,255,255,0.95)"
+                stroke-width="1.7"
+              />
+              <path d="M7 16h11" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand-title">LimitedPanelAPI</div>
+            <div class="brand-sub">配置面板（推荐：用简洁配置保存）</div>
+          </div>
+        </div>
+        <div class="header-actions">
+          <span class="badge mono" id="serverInfo">loading...</span>
+          <button class="btn" id="btnMetaSync" type="button">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+              <path d="M20 4v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+            同步 meta
+          </button>
+          <button class="btn" id="btnReload" type="button">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M21 12a9 9 0 1 1-3.2-6.9"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+              <path d="M21 4v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+            重新加载
+          </button>
+        </div>
+      </div>
+      <div class="container nav" aria-label="页面导航">
+        <a class="chip" href="#overview">概览</a>
+        <a class="chip" href="#simple">简洁配置</a>
+        <a class="chip" href="#proxy">代理导入</a>
+        <a class="chip" href="#advanced">高级 YAML</a>
+      </div>
+    </header>
+
+    <main class="container main">
+      <section class="grid" id="overview">
+        <div class="card split">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">服务</div>
+              <div class="card-sub">常用接口（点击新窗口打开）</div>
+            </div>
+          </div>
+          <div class="card-bd">
+            <div class="kv">
+              <div class="k">Base</div>
+              <div class="v mono" id="serverInfo2">-</div>
+              <div class="k">WebUI</div>
+              <div class="v mono">/ui</div>
+              <div class="k">Health</div>
+              <div class="v mono">/healthz</div>
+            </div>
+            <div class="links">
+              <a class="link mono" href="/healthz" target="_blank" rel="noreferrer">/healthz</a>
+              <a class="link mono" href="/gs/hyperpanel" target="_blank" rel="noreferrer">/gs/hyperpanel</a>
+              <a class="link mono" href="/sr/hyperpanel" target="_blank" rel="noreferrer">/sr/hyperpanel</a>
+              <a class="link mono" href="/zzz/hyperpanel" target="_blank" rel="noreferrer">/zzz/hyperpanel</a>
+            </div>
+          </div>
+          <div class="card-ft">
+            提示：监听地址/端口修改后需要重启进程生效；其余多数配置会立即生效。
+          </div>
+        </div>
+
+        <div class="card split">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Meta</div>
+              <div class="card-sub">GS/SR 来源与更新时间（自动读取 resources/meta-*/.meta-source.json）</div>
+            </div>
+            <span class="badge" id="metaSyncBadge">loading...</span>
+          </div>
+          <div class="card-bd" id="metaInfo">loading...</div>
+        </div>
+
+        <div class="card split">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">每日终止线</div>
+              <div class="card-sub">当日扫描进度（读取 data/scan.sqlite → scan_daily_gate）</div>
+            </div>
+          </div>
+          <div class="card-bd" id="gateInfo">loading...</div>
+        </div>
+
+        <div class="card split">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">代理池</div>
+              <div class="card-sub">节点数量统计（SQLite：data/proxy.sqlite）</div>
+            </div>
+            <span class="badge mono" id="proxyNodeCount">nodes: -</span>
+          </div>
+          <div class="card-bd">
+            <div class="help">
+              订阅 URL / 节点文本导入在“代理导入”里进行；导入会自动去重，仅展示本次新增节点。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="simple" style="margin-top: 12px;">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">
+              简洁配置
+              <span class="badge">推荐</span>
+            </div>
+            <div class="card-sub">保存会写入 <code>config/config.yaml</code>（精简版；会丢失注释/格式）</div>
+          </div>
+          <div class="card-actions">
+            <button class="btn primary" id="btnSaveSimple" type="button">保存（精简）</button>
+            <button class="btn" id="btnSaveSimpleMerge" type="button">保存（保留高级项）</button>
+          </div>
+        </div>
+        <div class="card-bd">
+          <div class="form-grid">
+            <div class="group">
+              <div class="group-title">服务</div>
+              <div class="field">
+                <label for="f_host">监听地址</label>
+                <input id="f_host" type="text" placeholder="0.0.0.0" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="f_port">监听端口</label>
+                <input id="f_port" type="number" placeholder="4567" inputmode="numeric" />
+              </div>
+              <div class="help">端口/监听地址修改后需重启进程生效。</div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">WebUI 访问控制</div>
+              <div class="field">
+                <label for="f_ui_allow_remote">远程访问</label>
+                <label class="check">
+                  <input id="f_ui_allow_remote" type="checkbox" />
+                  允许远程访问 WebUI（默认仅本机）
+                </label>
+              </div>
+              <div class="field">
+                <label for="f_ui_token">WebUI Token（建议）</label>
+                <input id="f_ui_token" type="password" placeholder="留空表示不启用" autocomplete="off" spellcheck="false" />
+                <div class="help">
+                  Token 对本机也生效；开启远程访问时强烈建议设置 Token。访问示例：<code class="mono">/ui?token=YOUR_TOKEN</code>
+                </div>
+              </div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">GS/SR Meta</div>
+              <div class="field">
+                <label for="f_meta_source">Meta 来源</label>
+                <select id="f_meta_source">
+                  <option value="cnb">CNB（qsyhh_res/meta）</option>
+                  <option value="miao-plugin">miao-plugin（拷贝 resources/meta-*）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f_miao_dir">miao-plugin 目录（可选）</label>
+                <input id="f_miao_dir" type="text" placeholder="留空则自动使用 <YunzaiRoot>/plugins/miao-plugin" autocomplete="off" spellcheck="false" />
+                <div class="help" id="miaoHint">仅当 Meta 来源为 miao-plugin 时生效。</div>
+              </div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">采样来源</div>
+              <div class="field">
+                <label for="f_samples_mode">GS/SR 采样方式</label>
+                <select id="f_samples_mode">
+                  <option value="playerdata">本地 PlayerData（gs/sr）</option>
+                  <option value="enka">Enka 扫描（gs/sr/zzz）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f_playerdata_dir">PlayerData 目录（可选）</label>
+                <input
+                  id="f_playerdata_dir"
+                  type="text"
+                  placeholder="留空则自动使用 <YunzaiRoot>/data/PlayerData/<game>"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <div class="help" id="playerdataHint">仅当采样方式为 playerdata 时生效。</div>
+              </div>
+            </div>
+
+            <div class="group" style="grid-column: 1 / -1;">
+              <div class="group-title">Enka UID 范围（可选）</div>
+              <div class="uid-grid">
+                <div class="uid-card">
+                  <div class="uid-title">GS（通常 9 位）</div>
+                  <div class="field">
+                    <label for="f_uid_start_gs">起始 UID</label>
+                    <input id="f_uid_start_gs" type="number" placeholder="100000001" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label for="f_uid_end_gs">结束 UID</label>
+                    <input id="f_uid_end_gs" type="number" placeholder="242422996" inputmode="numeric" />
+                  </div>
+                </div>
+
+                <div class="uid-card">
+                  <div class="uid-title">SR（通常 9 位）</div>
+                  <div class="field">
+                    <label for="f_uid_start_sr">起始 UID</label>
+                    <input id="f_uid_start_sr" type="number" placeholder="100000001" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label for="f_uid_end_sr">结束 UID</label>
+                    <input id="f_uid_end_sr" type="number" placeholder="242422996" inputmode="numeric" />
+                  </div>
+                </div>
+
+                <div class="uid-card">
+                  <div class="uid-title">ZZZ（必须 8 位）</div>
+                  <div class="field">
+                    <label for="f_uid_start_zzz">起始 UID</label>
+                    <input id="f_uid_start_zzz" type="number" placeholder="10000000" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label for="f_uid_end_zzz">结束 UID</label>
+                    <input id="f_uid_end_zzz" type="number" placeholder="99999999" inputmode="numeric" />
+                  </div>
+                  <div class="help">注意：ZZZ 的 UID 不是 8 位会导致保存失败。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">Enka 扫描参数</div>
+              <div class="field">
+                <label for="f_max_count">每次最多扫描 UID 数</label>
+                <input id="f_max_count" type="number" placeholder="20" inputmode="numeric" />
+              </div>
+              <div class="help">并发已改为“自适应 + 指数退避”（v2），不再提供手动并发上限。</div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">代理（v2ray-core）</div>
+              <div class="field">
+                <label for="f_proxy_enabled">开关</label>
+                <label class="check"><input id="f_proxy_enabled" type="checkbox" /> 启用代理池（用于 Enka 并发抓取）</label>
+              </div>
+              <div class="help">订阅/节点导入见“代理导入”。</div>
+            </div>
+
+            <div class="group">
+              <div class="group-title">极限面板（Preset）</div>
+              <div class="field">
+                <label for="f_preset_uid">UID</label>
+                <input id="f_preset_uid" type="text" placeholder="gs/sr 默认 100000000；zzz 默认 10000000（程序会自动处理）" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="f_preset_name">名称</label>
+                <input id="f_preset_name" type="text" placeholder="极限面板" autocomplete="off" spellcheck="false" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card-ft">
+          想保留手写 YAML 的注释与格式，请使用“高级 YAML”保存（<code>/api/config</code>）。
+        </div>
+      </section>
+
+      <section class="card" id="proxy" style="margin-top: 12px;">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">
+              代理节点 / 订阅导入
+              <span class="badge mono" id="proxyNodeCount2">nodes: -</span>
+            </div>
+            <div class="card-sub">API：<code>/api/proxy/import</code>（仅展示本次新增节点；重复会被忽略）</div>
+          </div>
+          <div class="card-actions">
+            <button class="btn primary" id="btnProxyImport" type="button">导入</button>
+            <button class="btn" id="btnProxyRefreshCount" type="button">刷新节点数</button>
+          </div>
+        </div>
+        <div class="card-bd">
+          <div class="form-grid">
+            <div class="group" style="grid-column: 1 / -1;">
+              <div class="group-title">订阅链接（可选）</div>
+              <div class="field">
+                <label for="f_proxy_sub_urls">一行一个 URL（或用空格/逗号分隔）</label>
+                <textarea id="f_proxy_sub_urls" class="ta-small" spellcheck="false" placeholder="https://example.com/sub.txt"></textarea>
+                <div class="help">可选：把 URL 追加写入 <code>proxy.subscription.urls</code>（写入后重启生效）。</div>
+              </div>
+              <div class="field">
+                <label for="f_proxy_nodes_text">节点文本（可选）</label>
+                <textarea
+                  id="f_proxy_nodes_text"
+                  class="ta-small"
+                  spellcheck="false"
+                  placeholder="粘贴 Clash YAML / base64 / vmess:// vless:// trojan:// ss:// ..."
+                ></textarea>
+                <div class="help">不依赖订阅：直接解析并导入节点到 SQLite。</div>
+              </div>
+              <div class="field">
+                <label for="f_proxy_save_urls">写入配置</label>
+                <label class="check"><input id="f_proxy_save_urls" type="checkbox" checked /> 保存订阅链接到配置</label>
+                <div class="help">导入会去重；已存在节点不会重复入库。</div>
+              </div>
+            </div>
+          </div>
+          <div class="resultbox hidden" id="proxyImportResult"></div>
+        </div>
+      </section>
+
+      <section style="margin-top: 12px;">
+        <details class="details" id="advanced">
+          <summary>
+            <span>高级：直接编辑 YAML（保留注释/格式）</span>
+            <span class="muted">不推荐新手使用</span>
+          </summary>
+          <div class="toolbar">
+            <div class="left">
+              <label for="kind">查看</label>
+              <select id="kind">
+                <option value="user" selected>用户配置（config.yaml）</option>
+                <option value="default">默认配置（defSet.yaml，只读）</option>
+              </select>
+              <span class="badge mono" id="filePath"></span>
+            </div>
+            <div class="left">
+              <span class="badge">API：<code>/api/config</code></span>
+              <button class="btn primary" id="btnSave" type="button">保存 YAML</button>
+            </div>
+          </div>
+          <div class="details-body">
+            <textarea id="yaml" spellcheck="false"></textarea>
+            <div class="help" style="margin-top: 10px;">
+              安全提示：如果你把服务监听到 <code>0.0.0.0</code>，建议保持 WebUI 仅本机可访问（默认）。如需远程访问，请开启
+              <code>server.ui.allowRemote</code> 并设置 <code>server.ui.token</code>。
+            </div>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const uiToken = new URLSearchParams(location.search).get("token") || "";
+      let _statusTimer = null;
+
+      function setStatus(text, kind) {
+        const el = $("status");
+        if (!el) return;
+        const msg = String(text || "").trim();
+        el.textContent = msg;
+        el.className = "status" + (kind ? " " + kind : "");
+        el.dataset.show = msg ? "1" : "0";
+
+        if (_statusTimer) clearTimeout(_statusTimer);
+        if (msg && kind !== "err") {
+          _statusTimer = setTimeout(() => {
+            el.dataset.show = "0";
+          }, 5500);
+        }
+      }
+
+      async function apiFetch(url, options = {}) {
+        const headers = { ...(options.headers || {}) };
+        if (uiToken) headers["x-ui-token"] = uiToken;
+        return await fetch(url, { ...options, headers });
+      }
+
+      function normalizeMetaType(v) {
+        const s = String(v || "").trim().toLowerCase();
+        if (["miao-plugin", "miaoplugin", "miao"].includes(s)) return "miao-plugin";
+        return "cnb";
+      }
+
+      function normalizeSamplesMode(v) {
+        const s = String(v || "").trim().toLowerCase();
+        return ["enka", "playerdata"].includes(s) ? s : "playerdata";
+      }
+
+      function formatIso(iso) {
+        if (!iso) return "-";
+        try {
+          const d = new Date(String(iso));
+          if (Number.isNaN(d.getTime())) return String(iso);
+          return d.toLocaleString();
+        } catch {
+          return String(iso);
+        }
+      }
+
+      function renderMetaInfo(json) {
+        const box = $("metaInfo");
+        const badge = $("metaSyncBadge");
+        if (!box) return;
+        if (!json || !json.ok) {
+          box.textContent = "meta info unavailable";
+          if (badge) {
+            badge.textContent = "error";
+            badge.className = "badge err";
+          }
+          return;
+        }
+
+        if (badge) {
+          badge.textContent = json.syncing ? "syncing…" : "idle";
+          badge.className = "badge" + (json.syncing ? " ok" : "");
+        }
+
+        const lines = [];
+        for (const g of ["gs", "sr"]) {
+          const item = json[g];
+          const marker = item?.marker || null;
+          if (!item) continue;
+
+          const type = marker?.type || "unknown";
+          const updatedAt = formatIso(marker?.updatedAt);
+
+          let extra = "";
+          if (type === "cnb") {
+            const repo = marker?.cnb?.repo || "";
+            const branch = marker?.cnb?.branch || "";
+            extra = [repo, branch].filter(Boolean).join(" ");
+          } else if (type === "miao-plugin") {
+            const kind = marker?.miaoPlugin?.kind || "";
+            const dir = marker?.miaoPlugin?.dir || "";
+            extra = [kind, dir].filter(Boolean).join(" ");
+          }
+
+          lines.push(`${g.toUpperCase()}: type=${type}`);
+          lines.push(`  updatedAt: ${updatedAt}`);
+          lines.push(`  root: ${item?.root || "-"}`);
+          if (extra) lines.push(`  info: ${extra}`);
+        }
+
+        box.textContent = lines.length ? lines.join("\n") : "empty";
+      }
+
+      function renderGateInfo(json) {
+        const box = $("gateInfo");
+        if (!box) return;
+        if (!json || !json.ok) {
+          box.textContent = "gate info unavailable";
+          return;
+        }
+
+        const lines = [];
+        lines.push(`day: ${json.day}`);
+        lines.push("");
+        for (const g of ["gs", "sr", "zzz"]) {
+          const gate = json?.gates?.[g] || null;
+          if (!gate) {
+            lines.push(`${g.toUpperCase()}: -`);
+            continue;
+          }
+          const total = gate.totalChars ?? "-";
+          const ok = gate.qualifiedChars ?? "-";
+          const done = gate.done ? "done" : "running";
+          const threshold = gate.detail?.threshold ?? null;
+          const missing = Array.isArray(gate.detail?.missing) ? gate.detail.missing.length : null;
+          const below = Array.isArray(gate.detail?.below) ? gate.detail.below.length : null;
+          const meta = [
+            threshold != null ? `threshold=${threshold}` : "",
+            missing != null ? `missing=${missing}` : "",
+            below != null ? `below=${below}` : ""
+          ]
+            .filter(Boolean)
+            .join(" ");
+          lines.push(`${g.toUpperCase()}: ${done}  qualified=${ok}/${total}` + (meta ? `  (${meta})` : ""));
+        }
+        box.textContent = lines.join("\n");
+      }
+
+      async function loadMetaInfo() {
+        const res = await apiFetch("/api/meta/info");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "meta_info_failed"} (${res.status})`);
+        renderMetaInfo(json);
+      }
+
+      async function loadGateInfo() {
+        const res = await apiFetch("/api/samples/gate?game=all");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "gate_failed"} (${res.status})`);
+        renderGateInfo(json);
+      }
+
+      async function loadConfig() {
+        const kind = $("kind").value;
+        $("btnSave").disabled = kind !== "user";
+        setStatus("loading...", "");
+        const res = await apiFetch(`/api/config?kind=${encodeURIComponent(kind)}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`${json.error || "request_failed"} (${res.status})`);
+        }
+        $("filePath").textContent = json.file || "";
+        $("yaml").value = json.yaml || "";
+        setStatus("ok", "ok");
+      }
+
+      function updateSimpleVisibility() {
+        const metaType = normalizeMetaType($("f_meta_source").value);
+        const samplesMode = normalizeSamplesMode($("f_samples_mode").value);
+
+        const showMiao = metaType === "miao-plugin";
+        $("f_miao_dir").disabled = !showMiao;
+        $("miaoHint").style.opacity = showMiao ? "1" : "0.6";
+
+        const showPlayerData = samplesMode === "playerdata";
+        $("f_playerdata_dir").disabled = !showPlayerData;
+        $("playerdataHint").style.opacity = showPlayerData ? "1" : "0.6";
+
+        // UID ranges: always editable (GS/SR only take effect when samples.mode=enka; ZZZ always uses Enka).
+        for (const id of ["f_uid_start_gs", "f_uid_end_gs", "f_uid_start_sr", "f_uid_end_sr", "f_uid_start_zzz", "f_uid_end_zzz"]) {
+          $(id).disabled = false;
+        }
+      }
+
+      async function loadSimple() {
+        const res = await apiFetch(`/api/config-json?kind=merged`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "request_failed"} (${res.status})`);
+
+        const cfg = json.json || {};
+        $("f_host").value = (cfg.server && cfg.server.host) ? String(cfg.server.host) : "0.0.0.0";
+        $("f_port").value = (cfg.server && cfg.server.port) ? String(cfg.server.port) : "4567";
+
+        $("f_ui_allow_remote").checked = Boolean(cfg?.server?.ui?.allowRemote ?? false);
+        $("f_ui_token").value = cfg?.server?.ui?.token == null ? "" : String(cfg.server.ui.token);
+
+        $("f_meta_source").value = normalizeMetaType(cfg?.meta?.source?.type);
+        $("f_miao_dir").value = String(cfg?.meta?.source?.miaoPlugin?.dir || "");
+
+        $("f_samples_mode").value = normalizeSamplesMode(cfg?.samples?.mode);
+        $("f_playerdata_dir").value = String(cfg?.samples?.playerdata?.dir || "");
+
+        const enka = cfg?.samples?.enka || {};
+        const legacyUidStart = enka?.uidStart;
+        const legacyUidEnd = enka?.uidEnd;
+        const enkaGs = enka?.gs || {};
+        const enkaSr = enka?.sr || {};
+        const enkaZzz = enka?.zzz || {};
+
+        const gsUidStart = enkaGs?.uidStart != null ? enkaGs.uidStart : legacyUidStart;
+        const gsUidEnd = enkaGs?.uidEnd != null ? enkaGs.uidEnd : legacyUidEnd;
+        const srUidStart = enkaSr?.uidStart != null ? enkaSr.uidStart : legacyUidStart;
+        const srUidEnd = enkaSr?.uidEnd != null ? enkaSr.uidEnd : legacyUidEnd;
+
+        $("f_uid_start_gs").value = gsUidStart == null ? "" : String(gsUidStart);
+        $("f_uid_end_gs").value = gsUidEnd == null ? "" : String(gsUidEnd);
+        $("f_uid_start_sr").value = srUidStart == null ? "" : String(srUidStart);
+        $("f_uid_end_sr").value = srUidEnd == null ? "" : String(srUidEnd);
+        $("f_uid_start_zzz").value = enkaZzz?.uidStart == null ? "" : String(enkaZzz.uidStart);
+        $("f_uid_end_zzz").value = enkaZzz?.uidEnd == null ? "" : String(enkaZzz.uidEnd);
+        $("f_max_count").value = cfg?.samples?.enka?.maxCount == null ? "20" : String(cfg.samples.enka.maxCount);
+
+        $("f_proxy_enabled").checked = Boolean(cfg?.proxy?.enabled ?? false);
+
+        $("f_preset_uid").value = cfg?.preset?.uid == null ? "" : String(cfg.preset.uid);
+        $("f_preset_name").value = cfg?.preset?.name == null ? "极限面板" : String(cfg.preset.name);
+
+        updateSimpleVisibility();
+      }
+
+      async function saveSimple(mode) {
+        setStatus("saving (simple)...", "");
+
+        const metaType = normalizeMetaType($("f_meta_source").value);
+        const samplesMode = normalizeSamplesMode($("f_samples_mode").value);
+
+        const payload = {
+          server: {
+            host: $("f_host").value,
+            port: $("f_port").value,
+            enabled: true,
+            ui: {
+              allowRemote: Boolean($("f_ui_allow_remote")?.checked),
+              token: String($("f_ui_token")?.value || "")
+            }
+          },
+          meta: {
+            source: {
+              type: metaType,
+              miaoPlugin: { dir: $("f_miao_dir").value }
+            }
+          },
+          samples: {
+            mode: samplesMode,
+            playerdata: { dir: $("f_playerdata_dir").value },
+            enka: {
+              gs: {
+                uidStart: $("f_uid_start_gs").value || null,
+                uidEnd: $("f_uid_end_gs").value || null,
+              },
+              sr: {
+                uidStart: $("f_uid_start_sr").value || null,
+                uidEnd: $("f_uid_end_sr").value || null,
+              },
+              zzz: {
+                uidStart: $("f_uid_start_zzz").value || null,
+                uidEnd: $("f_uid_end_zzz").value || null,
+              },
+              maxCount: $("f_max_count").value || 20,
+            }
+          },
+          preset: {
+            uid: $("f_preset_uid").value,
+            name: $("f_preset_name").value
+          },
+          proxy: {
+            enabled: Boolean($("f_proxy_enabled")?.checked)
+          }
+        };
+
+        const res = await apiFetch(`/api/config-simple?mode=${encodeURIComponent(mode || "replace")}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          throw new Error(`${json.error || "save_failed"} (${res.status})${msg}`);
+        }
+        const backupLine = json.backup ? `\nbackup: ${json.backup}` : "";
+        setStatus(`saved: ${json.file}${backupLine}\nmode: ${json.mode}`, "ok");
+
+        // refresh views
+        await Promise.all([
+          loadConfig().catch(() => {}),
+          loadSimple().catch(() => {}),
+          loadMetaInfo().catch(() => {}),
+          loadGateInfo().catch(() => {}),
+          refreshProxyNodeCount().catch(() => {}),
+        ]);
+      }
+
+      async function saveConfig() {
+        const kind = $("kind").value;
+        if (kind !== "user") return;
+        setStatus("saving...", "");
+        const body = { yaml: $("yaml").value };
+        const res = await apiFetch(`/api/config?kind=user`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          throw new Error(`${json.error || "save_failed"} (${res.status})${msg}`);
+        }
+        const backupLine = json.backup ? `\nbackup: ${json.backup}` : "";
+        setStatus(`saved: ${json.file}${backupLine}`, "ok");
+      }
+
+      async function syncMeta() {
+        setStatus("meta syncing...", "");
+        const btn = $("btnMetaSync");
+        if (btn) btn.disabled = true;
+        try {
+          const res = await apiFetch(`/api/meta/sync?game=all`, { method: "POST" });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(`${json.error || "meta_sync_failed"} (${res.status})`);
+          }
+          setStatus("meta synced: gs,sr", "ok");
+          await loadMetaInfo().catch(() => {});
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+
+      function setProxyResult(text, kind) {
+        const el = $("proxyImportResult");
+        if (!el) return;
+        el.textContent = text || "";
+        el.className = "resultbox" + (text ? "" : " hidden") + (kind ? " " + kind : "");
+      }
+
+      function splitToList(text) {
+        return String(text || "")
+          .split(/[\r\n,;\s]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      async function refreshProxyNodeCount() {
+        const el1 = $("proxyNodeCount");
+        const el2 = $("proxyNodeCount2");
+        const res = await apiFetch("/api/proxy/nodes/summary");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${json.error || "proxy_nodes_failed"} (${res.status})`);
+        const text = `nodes: ${json.count ?? "-"}`;
+        if (el1) el1.textContent = text;
+        if (el2) el2.textContent = text;
+      }
+
+      async function proxyImport() {
+        setProxyResult("importing...", "");
+        const urls = splitToList($("f_proxy_sub_urls")?.value);
+        const rawText = String($("f_proxy_nodes_text")?.value || "");
+        const saveUrlsToConfig = Boolean($("f_proxy_save_urls")?.checked);
+
+        const res = await apiFetch("/api/proxy/import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ subscriptionUrls: urls, rawText, saveUrlsToConfig }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = json.message ? `\n${json.message}` : "";
+          setProxyResult(`${json.error || "proxy_import_failed"} (${res.status})${msg}`, "err");
+          return;
+        }
+
+        const lines = [];
+        lines.push(`parsed=${json.parsed} inserted=${json.inserted} skippedExisting=${json.skippedExisting}`);
+        lines.push(`nodeTotal=${json.nodeTotal ?? "-"}`);
+        if (json.configUpdated) {
+          lines.push(`configUpdated=true urlsAdded=${json.urlsAdded} urlsTotal=${json.urlsTotal}`);
+        } else {
+          lines.push(`configUpdated=false`);
+        }
+        if (json.subscriptionError) {
+          lines.push(`subscriptionError: ${json.subscriptionError}`);
+        }
+        if (Array.isArray(json.insertedPreview) && json.insertedPreview.length) {
+          lines.push("");
+          lines.push("new nodes:");
+          for (const n of json.insertedPreview) {
+            const tag = n.tag ? ` ${n.tag}` : "";
+            lines.push(`- ${n.type || "?"} ${n.host || "?"}:${n.port || 0}${tag}`);
+          }
+        } else {
+          lines.push("new nodes: 0");
+        }
+        setProxyResult(lines.join("\n"), "");
+        await refreshProxyNodeCount();
+      }
+
+      async function init() {
+        const base = `${location.protocol}//${location.host}`;
+        $("serverInfo").textContent = base;
+        const base2 = $("serverInfo2");
+        if (base2) base2.textContent = base;
+
+        $("kind").addEventListener("change", () => loadConfig().catch((e) => setStatus(String(e), "err")));
+        $("btnReload").addEventListener("click", () => Promise.all([
+          loadSimple(),
+          loadConfig(),
+          loadMetaInfo(),
+          loadGateInfo(),
+          refreshProxyNodeCount(),
+        ]).then(() => setStatus("reloaded", "ok")).catch((e) => setStatus(String(e), "err")));
+        $("btnSave").addEventListener("click", () => saveConfig().catch((e) => setStatus(String(e), "err")));
+        $("btnMetaSync").addEventListener("click", () => syncMeta().catch((e) => setStatus(String(e), "err")));
+        $("btnSaveSimple").addEventListener("click", () => saveSimple("replace").catch((e) => setStatus(String(e), "err")));
+        $("btnSaveSimpleMerge").addEventListener("click", () => saveSimple("merge").catch((e) => setStatus(String(e), "err")));
+        $("btnProxyImport")?.addEventListener("click", () => proxyImport().catch((e) => setProxyResult(String(e), "err")));
+        $("btnProxyRefreshCount")?.addEventListener("click", () => refreshProxyNodeCount().catch((e) => setProxyResult(String(e), "err")));
+
+        $("f_meta_source").addEventListener("change", updateSimpleVisibility);
+        $("f_samples_mode").addEventListener("change", updateSimpleVisibility);
+
+        await Promise.all([
+          loadSimple(),
+          loadConfig(),
+          loadMetaInfo().catch(() => {}),
+          loadGateInfo().catch(() => {}),
+          refreshProxyNodeCount().catch(() => {}),
+        ]);
+
+        setStatus("", "");
+      }
+
+      init().catch((e) => setStatus(String(e), "err"));
+    </script>
+  </body>
+</html>

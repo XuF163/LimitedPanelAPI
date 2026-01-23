@@ -66,12 +66,9 @@ samples:
       uidEnd: null
 
     maxCount: 20000
-    # Enka 请求实现：js | rust | auto
-    # - auto：有代理且 Rust 二进制可用时使用 rust，否则回退到 js
-    # - rust：强制使用 rust（无代理也可用，但仅进程内限速；不走 sqlite 全局限速，可能触发 429）
-    fetcher: auto
-    # 并发请求数（配合 delayMs 控制总速率；开启代理池时会按代理数量分桶节流）
-    concurrency: 20
+    # v2：并发改为“自适应 + 指数退避”，不再提供手动并发上限。
+    # - 有代理时：吞吐主要受「可用代理数 × 每桶 delayMs」影响
+    # - 无代理时：通过 scan.sqlite 的全局限速(noProxyDelayMs) 保守运行
     # 每次启动优先重试的 UID 数（来自 sqlite 的 next_retry_at 队列）
     retryFirst: 1
     # 有代理时：这是“每个代理桶”的请求间隔
@@ -168,10 +165,6 @@ proxy:
   subscription:
     # 订阅链接列表（支持：base64/vmess/vless/trojan/ss、以及 Clash YAML 的 proxies:）
     urls: []
-    # 订阅解析实现：js | rust | auto
-    # - auto：Rust 二进制可用时使用 rust，否则回退到 js
-    # - rust：强制使用 rust（不可用则报错）
-    parser: auto
     # 订阅拉取超时（毫秒）
     timeoutMs: 30000
     # 订阅拉取时使用的 HTTP 代理（例如：http://127.0.0.1:10808）。留空则直连；也可用环境变量 PROXY_SUB_HTTP_PROXY。
@@ -185,7 +178,7 @@ proxy:
     cacheDir: ./data/proxy/subscription-cache
     # 缓存 TTL（秒）；0 表示不限制（只要文件存在就可用）
     cacheTtlSec: 0
-    # 最多保留多少个可用节点作为代理池（可填 auto 自动对齐 samples.enka.concurrency）
+    # 最多保留多少个可用节点作为代理池（auto/0 表示使用默认值；也可用环境变量 PROXY_POOL_SIZE 覆盖）
     maxNodes: 30
     # 最多探测多少个节点（从订阅里按顺序取前 N 个探测，直到凑满 maxNodes）
     probeCount: 20
@@ -219,8 +212,7 @@ qa:
     stepSize: 200
     # 每个代理的请求间隔（毫秒）。总吞吐量≈代理数 / delayMs
     delayMs: 3000
-    # 并发 worker 数（建议 <= 代理池数量）
-    concurrency: 230
+    # v2：并发由系统自适应调节（指数退避），不再提供手动并发上限。
     # 单次 Enka 请求超时（毫秒）
     enkaTimeoutMs: 15000
     gs:

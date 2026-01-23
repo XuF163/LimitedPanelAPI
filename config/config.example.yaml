@@ -35,8 +35,6 @@ samples:
       uidStart: null
       uidEnd: null
     maxCount: 20
-    fetcher: auto
-    concurrency: 1
     dailyGate:
       enabled: false
       threshold:

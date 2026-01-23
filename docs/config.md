@@ -5,9 +5,11 @@
 - 默认配置：`config/defSet.yaml`（请勿直接修改）
 - 用户配置：`config/config.yaml`（不存在时首次启动会自动从默认配置复制生成；也可参考 `config/config.example.yaml`）
 
-建议仅使用 `npm start` 启动，并通过 `GET /ui`（WebUI）修改配置。
+建议仅使用 `npm start` 启动（会先执行 TypeScript 构建生成 `dist/`），并通过 `GET /ui`（WebUI）修改配置。
 
 （仍保留少量环境变量覆盖能力用于调试，但不推荐作为常规使用方式。）
+
+> 注：本文档已按“TS 二次重构（v2）”路线更新，旧版 Rust 相关配置项将被逐步移除。
 
 ## HTTP 服务 & WebUI
 
@@ -135,8 +137,6 @@ meta:
 - 未配置某个游戏的 UID 列表/范围时：启动只会输出 `skipped game=<game>`，不会去请求 Enka
 - WebUI 即使在 `samples.mode: playerdata` 也允许填写并保存这些范围（用于预配置）；但 `gs/sr` 只有切到 `enka` 才会生效
 - `maxCount`：每次启动最多扫多少 UID（避免一次扫太大）
-- `fetcher`：Enka 请求实现：`js | rust | auto`
-- `concurrency`：并发 worker 数
 - `delayMs`：有代理时按“代理数量分桶节流”的每桶间隔（毫秒）
 - `noProxyDelayMs`：无代理/无可用节点时的 **全局限速**（跨 gs/sr/zzz、跨进程共享；毫秒）
 - `timeoutMs`：单次请求超时（毫秒）
@@ -145,11 +145,11 @@ meta:
 - `saveRawFile`：是否额外写 `data/raw/<game>/<uid>.json`（大规模扫描不推荐）
 - `circuitBreaker.*`：简易熔断策略
 
-Rust fetcher（可选）：
-- 可用 `ENKA_FETCHER=js|rust|auto` 覆盖配置（默认跟随 `samples.enka.fetcher`）
-- 可用 `LIMITEDPANEL_RS_BIN` 指定 Rust 二进制路径；未指定时会尝试 `cargo build --release`（Windows 需要 VS Build Tools/MSVC；`RUST_NO_BUILD=1` 可禁用自动构建）
-- 默认 `auto`：仅在启用代理（`PROXY_URLS` 非空）时优先使用 rust，否则回退到 js（保留 sqlite 全局限速）
-- 强制 `rust`：无代理也会使用 rust（进程内限速，不走 sqlite 全局限速；建议调大 `samples.enka.noProxyDelayMs`，避免 429）
+智能并发与指数退避（v2）：
+
+- 扫描并发由系统自动调节（根据 429/超时/失败率/可用代理数等信号），**不再提供手动并发上限**。
+- 失败场景（尤其 429 / HTML/WAF / 超时）会触发指数退避（带 jitter），避免同步风暴与无意义重试。
+- 旧字段兼容：若历史配置中存在 `samples.enka.concurrency` / `samples.enka.fetcher`，v2 将忽略并在后续版本彻底删除。
 
 定期重扫（刷新样本）：
 
@@ -211,10 +211,13 @@ ZZZ 的面板转换/评分/专武识别依赖 `ZZZ-Plugin` 资源（如 `model/E
 - `proxy.db.path`：代理节点启动/测活记录 SQLite（默认 `data/proxy.sqlite`）
 - `proxy.v2ray.keepConfigFiles`：是否保留 v2ray 配置文件到项目目录
 - `proxy.subscription.urls`
-- `proxy.subscription.parser`：订阅解析实现（`js|rust|auto`，也可用环境变量 `PROXY_SUB_PARSER` 覆盖）
 - `proxy.subscription.maxNodes`
 - `proxy.subscription.probeCount`
 - `proxy.subscription.testUrl`：建议使用返回 JSON 的 API 地址（403/404 也算“可连通”）
+
+说明（v2 动态扩充）：
+
+- `proxy.subscription.maxNodes` 作为“目标池大小”（targetSize）。运行期会持续探测/补齐，避免池变成启动时的静态快照。
 
 ## QA / 开发调试
 

@@ -9,7 +9,7 @@
 - **节点导入**：WebUI 支持导入订阅 URL/节点文本，落库到 `data/proxy.sqlite`（表 `proxy_node`）。
 - **代理池启动**：启动时从订阅（或 DB fallback）解析节点，使用 **v2ray-core** 启动多个本地 HTTP 代理（如 `http://127.0.0.1:179xx`）。
 - **测活逻辑**：对每个本地 HTTP 代理请求 `proxy.subscription.testUrl`（默认为 Enka API），要求 **JSON 且非 HTML** 才算可用。
-- **采样并发**：采样阶段按“代理桶”节流（每个代理独立的 `delayMs`），并发 worker 在多个代理之间分摊请求。
+- **采样并发**：采样阶段按“代理桶”节流（每个代理独立的 `delayMs`），并发由调度器在多个代理桶之间自动分摊。
 
 但存在瓶颈：
 
@@ -34,7 +34,7 @@
 项目扫描吞吐的核心近似：
 
 - **有代理池**：吞吐 ≈ `usableNodes / delayMs`（每个代理桶独立节流）  
-  建议保持：`samples.enka.concurrency <= proxy.subscription.maxNodes`，否则多个 worker 会抢同一代理桶而失去并发收益。
+-  v2 中并发由系统自适应调节，不再允许通过配置设置“并发上限”。吞吐上限仍主要由可用节点数与每桶节流决定。
 - **无代理**：走全局限速（SQLite rate limiter），吞吐上限 ≈ `1 / noProxyDelayMs`（跨进程/跨游戏共享）。
 
 因此要达到更高吞吐，必须同时做到：
@@ -72,9 +72,11 @@
 
 对应代码位置：
 
-- 解析：`src/proxy/subscription.js`
-- 去重：`src/proxy/subscription.js` 的 `nodeKey()` / `dedupeNodes()`
-- DB 存储：`src/db/proxy.js`（表 `proxy_node`）
+- v2（TS）建议位置：
+  - 解析：`src/core/proxy/subscription.ts`
+  - 去重：`src/core/proxy/subscription.ts` 的 `nodeKey()` / `dedupeNodes()`
+  - DB 存储：`src/core/db/proxy.ts`（表 `proxy_node`）
+- 旧版（JS）位置（待清理）：`src/proxy/subscription.js`、`src/db/proxy.js`
 
 ### 3.2 内核适配器（Core Adapters）
 
@@ -152,7 +154,7 @@ interface ProxyCoreAdapter {
 其他高级项（可放“高级设置”）：
 
 - `pickStrategy`（first/spread）
-- 启动并发 `startConcurrency`
+- 探测/启动并发 `startConcurrency`（仅影响代理内核启动/测活阶段；不等同于 Enka 请求并发上限）
 - 失败阈值（禁用/降权策略）
 
 ### 4.2 建议增加的 API（给前端美化/运维）
@@ -186,10 +188,10 @@ interface ProxyCoreAdapter {
 
 ## 6. 与现有代码的对接点（快速索引）
 
-- 节点解析：`src/proxy/subscription.js`
-- v2ray 配置构建：`src/proxy/v2ray.js`
-- 代理池实现：`src/proxy/pool.js`
-- 代理 DB：`src/db/proxy.js`
-- 采样使用代理：`src/samples/collect.js`（通过 `PROXY_URLS`）
-- WebUI 导入节点 API：`src/server.js` 的 `POST /api/proxy/import`
-
+- v2（TS）建议位置：
+  - 节点解析：`src/core/proxy/subscription.ts`
+  - v2ray 配置构建：`src/core/proxy/v2ray.ts`
+  - 代理池实现：`src/core/proxy/pool.ts`
+  - 代理 DB：`src/core/db/proxy.ts`
+  - 采样使用代理：`src/core/samples/collect.ts`
+  - WebUI 导入节点 API：`src/server/routes/proxy.ts`

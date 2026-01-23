@@ -5,14 +5,23 @@
   "description": "极限面板 JSON 生成服务端",
   "type": "module",
   "scripts": {
-    "start": "node src/start.js"
+    "build": "tsc -p tsconfig.json && node dist/scripts/copy-assets.js",
+    "start": "npm run build && node dist/start.js",
+    "start:src": "node dist/start.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",
     "lodash": "^4.17.21",
     "undici": "^6.0.0"
   },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
   "imports": {
-    "#miao": "./src/miao/index.js"
+    "#miao": {
+      "types": "./src/miao/index.ts",
+      "default": "./dist/miao/index.js"
+    }
   }
 }

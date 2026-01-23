@@ -10,18 +10,20 @@
   - `enka`：通过 Enka API 扫 UID 段/UID 列表采样（`gs/sr/zzz`）。
 - **HTTP 接口**：默认监听 `0.0.0.0:4567`，提供 `/gs/hyperpanel`、`/sr/hyperpanel`、`/zzz/hyperpanel` 在线 JSON。
 - **SQLite 落盘**：扫描状态、（可选）原始响应、全局限速、代理测活记录都写 SQLite，避免生成海量小 json 文件。
-- **可选代理池（v2ray-core）**：自动下载内核、解析订阅、测活可用节点，并用于并发抓取 Enka（可关闭）。
+- **可选代理池（v2ray / mihomo）**：自动下载内核、解析订阅、测活可用节点，并用于并发抓取 Enka（可关闭）。
 
 ## 目录结构（关键）
 
 - `config/defSet.yaml`：默认配置（不要改）
 - `config/config.yaml`：用户配置（不存在会自动从默认配置生成）
+- `dist/`：TypeScript 构建产物（`npm start` 会自动生成/更新）
 - `data/scan.sqlite`：Enka 扫描状态 + raw（gzip）+ 全局限速槽位
 - `data/proxy.sqlite`：代理节点启动/测活记录（可选）
 - `data/samples/<game>/*.jsonl`：每个角色的样本集合（采样输出）
 - `out/<game>/<uid>.json`：生成的极限面板（HTTP 会直接返回这个 JSON）
 - `resources/meta-gs`、`resources/meta-sr`：GS/SR meta（可选：CNB / miao-plugin）
 - `resources/zzz-plugin` 或 `plugins/ZZZ-Plugin`：ZZZ 资源来源（见下文）
+- `src/ui/index.html`：WebUI 静态页（构建时会拷贝到 `dist/ui/`）
 
 ## 环境要求
 
@@ -55,6 +57,10 @@ npm start
 - `GET /zzz/hyperpanel`
 - `GET /presets/<game>/<uid>.json`
 - `GET /ui`（WebUI：推荐用“简洁配置”保存，配置项更少）
+- `GET /api/runtime/status`（运行时状态：并发/退避/代理池/扫描统计）
+- `GET /api/proxy/pool/status`、`POST /api/proxy/pool/rebuild`
+- `POST /api/samples/start`、`POST /api/samples/stop`
+- `POST /api/presets/generate`
 
 如果某个游戏的 `out/<game>/<uid>.json` 尚未生成，对应 `/<game>/hyperpanel` 会返回 404（先跑一次该游戏的生成即可）。
 
@@ -87,7 +93,7 @@ ZZZ 的面板转换/评分/专武识别依赖 `ZZZ-Plugin` 的资源文件（如
 - `Missing meta files ...`：打开 `GET /ui` 点击“同步 meta”，或重启（默认 `meta.autoSync: true` 会自动拉取）
 - `Missing PlayerData dir ...`：`samples.mode=playerdata` 时需要正确的 `data/PlayerData/<game>` 路径（可配置 `samples.playerdata.dir`）
 - `proxy enabled but no usable node found`：把 `proxy.required: false` 或 `proxy.enabled: false`，或换订阅/提高 `probeCount`
-- 大量 `429`：降低 `samples.enka.concurrency`、增大 `delayMs/noProxyDelayMs`，或启用代理池
+- 大量 `429`：并发已改为“自适应 + 指数退避”，不再支持手动并发上限；建议启用/扩充代理池、增大 `delayMs/noProxyDelayMs`，并等待退避恢复
 
 ## 免责声明
 
